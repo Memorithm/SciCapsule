@@ -1,0 +1,18 @@
+[package]
+name = "scicapsule"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.89"
+publish = false
+description = "SciCapsule product shell for portable, reproducible SciRust execution capsules"
+repository = "https://github.com/Memorithm/SciCapsule"
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "scicapsule"
+path = "src/main.rs"
+
+[lints.rust]
+unsafe_code = "deny"
