@@ -116,13 +116,17 @@ fn parse_command(args: &[String]) -> Result<Command, CliError> {
         [command, rest @ ..] if command == "pack" => parse_pack(rest),
         [command, file] if command == "inspect" => Ok(Command::Inspect(PathBuf::from(file))),
         [command, file] if command == "verify" => Ok(Command::Verify(PathBuf::from(file))),
-        [command, argument] if (command == "inspect" || command == "verify") && argument == "--help" => {
+        [command, argument]
+            if (command == "inspect" || command == "verify") && argument == "--help" =>
+        {
             Ok(Command::Help)
         }
         [command, ..] if command == "inspect" || command == "verify" => Err(CliError::usage(
             format!("`{command}` expects exactly one capsule file"),
         )),
-        [command, ..] => Err(CliError::usage(format!("unknown command or argument: {command}"))),
+        [command, ..] => Err(CliError::usage(format!(
+            "unknown command or argument: {command}"
+        ))),
     }
 }
 
@@ -140,7 +144,12 @@ fn parse_pack(args: &[String]) -> Result<Command, CliError> {
     while index < args.len() {
         match args[index].as_str() {
             "--name" => {
-                name = Some(take_unique_value(args, &mut index, "--name", name.is_some())?);
+                name = Some(take_unique_value(
+                    args,
+                    &mut index,
+                    "--name",
+                    name.is_some(),
+                )?);
             }
             "--entrypoint" => {
                 entrypoint = Some(take_unique_value(
@@ -191,7 +200,9 @@ fn take_unique_value(
     already_set: bool,
 ) -> Result<String, CliError> {
     if already_set {
-        return Err(CliError::usage(format!("{option} may be specified only once")));
+        return Err(CliError::usage(format!(
+            "{option} may be specified only once"
+        )));
     }
     *index += 1;
     args.get(*index)
@@ -273,15 +284,13 @@ fn verify_command(path: &Path) -> Result<String, CliError> {
 }
 
 fn read_file(path: &Path) -> Result<Vec<u8>, CliError> {
-    fs::read(path).map_err(|error| {
-        CliError::operation(format!("cannot read {}: {error}", path.display()))
-    })
+    fs::read(path)
+        .map_err(|error| CliError::operation(format!("cannot read {}: {error}", path.display())))
 }
 
 fn write_file(path: &Path, bytes: &[u8]) -> Result<(), CliError> {
-    fs::write(path, bytes).map_err(|error| {
-        CliError::operation(format!("cannot write {}: {error}", path.display()))
-    })
+    fs::write(path, bytes)
+        .map_err(|error| CliError::operation(format!("cannot write {}: {error}", path.display())))
 }
 
 #[cfg(test)]
@@ -298,10 +307,8 @@ mod tests {
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        let path = std::env::temp_dir().join(format!(
-            "scicapsule-{label}-{}-{nonce}",
-            std::process::id()
-        ));
+        let path =
+            std::env::temp_dir().join(format!("scicapsule-{label}-{}-{nonce}", std::process::id()));
         fs::create_dir_all(&path).unwrap();
         path
     }
