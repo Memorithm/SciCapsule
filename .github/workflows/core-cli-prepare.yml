@@ -1,0 +1,58 @@
+name: Core CLI branch preparation
+
+on:
+  push:
+    branches:
+      - feat/core-cli-pack-verify
+
+permissions:
+  contents: write
+
+jobs:
+  prepare:
+    runs-on: [self-hosted, Linux, ARM64, scirust-arm64, jetson-thor, internal]
+    timeout-minutes: 20
+    env:
+      CARGO_INCREMENTAL: 0
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          fetch-depth: 0
+
+      - name: Install stable
+        uses: dtolnay/rust-toolchain@fa04a1451ff1842e2626ccb99004d0195b455a88
+        with:
+          toolchain: stable
+          components: rustfmt, clippy
+
+      - name: Format
+        run: cargo fmt --all
+
+      - name: Resolve and check stable
+        run: cargo check --all-targets
+
+      - name: Clippy stable
+        run: cargo clippy --all-targets --locked -- -D warnings
+
+      - name: Tests stable
+        run: cargo test --all-targets --locked
+
+      - name: Install MSRV
+        uses: dtolnay/rust-toolchain@fa04a1451ff1842e2626ccb99004d0195b455a88
+        with:
+          toolchain: 1.89.0
+
+      - name: Check MSRV 1.89
+        run: cargo +1.89.0 check --all-targets --locked
+
+      - name: Commit deterministic state
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Cargo.lock src/lib.rs src/main.rs
+          if ! git diff --cached --quiet; then
+            git commit -m "chore: prepare operational CLI workspace state"
+            git push origin HEAD:feat/core-cli-pack-verify
+          fi
