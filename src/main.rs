@@ -3,17 +3,21 @@
 use std::process::ExitCode;
 
 fn main() -> ExitCode {
-    let mut args = std::env::args().skip(1);
-    match (args.next().as_deref(), args.next()) {
-        (None, None) | (Some("-h" | "--help"), None) => {
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    match args.as_slice() {
+        [] => {
             print!("{}", scicapsule::help_text());
             ExitCode::SUCCESS
         }
-        (Some("-V" | "--version"), None) => {
+        [argument] if argument == "-h" || argument == "--help" => {
+            print!("{}", scicapsule::help_text());
+            ExitCode::SUCCESS
+        }
+        [argument] if argument == "-V" || argument == "--version" => {
             println!("scicapsule {}", scicapsule::version());
             ExitCode::SUCCESS
         }
-        (Some(argument), _) => {
+        [argument, ..] => {
             eprintln!("unknown argument: {argument}");
             eprintln!("run `scicapsule --help` for usage");
             ExitCode::from(2)
