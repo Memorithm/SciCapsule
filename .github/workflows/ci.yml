@@ -9,26 +9,27 @@ permissions:
   contents: read
 
 jobs:
-  quality:
-    runs-on: ubuntu-latest
+  quality-and-msrv:
+    runs-on: [self-hosted, Linux, ARM64, scirust-arm64, jetson-thor, internal]
+    timeout-minutes: 15
+    env:
+      CARGO_INCREMENTAL: 0
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+      - uses: dtolnay/rust-toolchain@fa04a1451ff1842e2626ccb99004d0195b455a88
         with:
+          toolchain: stable
           components: rustfmt, clippy
       - name: Format
         run: cargo fmt --all -- --check
-      - name: Check
+      - name: Check stable
         run: cargo check --all-targets
-      - name: Clippy
+      - name: Clippy stable
         run: cargo clippy --all-targets -- -D warnings
-      - name: Tests
+      - name: Tests stable
         run: cargo test --all-targets
-
-  msrv:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@1.89.0
-      - name: Check MSRV
-        run: cargo check --all-targets
+      - uses: dtolnay/rust-toolchain@fa04a1451ff1842e2626ccb99004d0195b455a88
+        with:
+          toolchain: 1.89.0
+      - name: Check MSRV 1.89
+        run: cargo +1.89.0 check --all-targets
