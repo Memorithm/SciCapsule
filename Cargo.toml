@@ -4,8 +4,13 @@ version = "0.1.0"
 edition = "2021"
 rust-version = "1.89"
 publish = false
-description = "SciCapsule product shell for portable, reproducible SciRust execution capsules"
+description = "SciCapsule product CLI for portable, reproducible SciRust execution capsules"
 repository = "https://github.com/Memorithm/SciCapsule"
+
+[dependencies]
+scirust-capsule = { git = "https://github.com/Memorithm/scirust", rev = "7330f99d9a56932a4b99bb4a5f52bb8c07375332", package = "scirust-capsule" }
+scirust-capsule-schema = { git = "https://github.com/Memorithm/scirust", rev = "7330f99d9a56932a4b99bb4a5f52bb8c07375332", package = "scirust-capsule-schema" }
+serde_json = "1"
 
 [lib]
 path = "src/lib.rs"
