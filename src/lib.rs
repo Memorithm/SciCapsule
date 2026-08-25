@@ -39,7 +39,7 @@ mod tests {
     fn help_mentions_product_and_extension_purpose() {
         let help = help_text();
         assert!(help.contains(PRODUCT_NAME));
-        assert!(help.contains("portable"));
+        assert!(help.contains("Portable"));
         assert!(help.contains("--version"));
     }
 }
