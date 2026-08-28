@@ -6,6 +6,7 @@ mod provenance_cli;
 mod signature;
 mod trust;
 
+use scicapsule::extraction::{DEFAULT_EXTRACTION_LIMITS, MAX_CAPSULE_METADATA_BYTES};
 use scirust_capsule::Capsule;
 use signature::{sign_capsule, verify_capsule_signature, SignatureEnvelope};
 use std::fmt;
@@ -18,6 +19,8 @@ use trust::{TrustPolicy, MAX_SIGNATURES, MAX_TRUSTED_KEYS};
 const MAX_SIGNATURE_ENVELOPE_BYTES: u64 = 16 * 1024;
 const MAX_KEY_FILE_BYTES: u64 = 64 * 1024;
 const MAX_TRUST_POLICY_BYTES: u64 = 256 * 1024;
+const MAX_AUTH_CAPSULE_BYTES: u64 =
+    DEFAULT_EXTRACTION_LIMITS.max_total_bytes + MAX_CAPSULE_METADATA_BYTES;
 
 #[derive(Debug, Eq, PartialEq)]
 enum ProductCommand {
@@ -431,7 +434,7 @@ fn sign_command(
     key_path: &Path,
     output: &Path,
 ) -> Result<String, ProductError> {
-    let capsule_bytes = read_file(capsule_path)?;
+    let capsule_bytes = read_auth_capsule(capsule_path)?;
     let capsule = Capsule::decode(&capsule_bytes).map_err(|error| {
         ProductError::operation(format!(
             "invalid capsule {}: {error}",
@@ -459,7 +462,7 @@ fn verify_signature_command(
     signature_path: &Path,
     key_path: &Path,
 ) -> Result<String, ProductError> {
-    let capsule_bytes = read_file(capsule_path)?;
+    let capsule_bytes = read_auth_capsule(capsule_path)?;
     let capsule = Capsule::decode(&capsule_bytes).map_err(|error| {
         ProductError::operation(format!(
             "invalid capsule {}: {error}",
@@ -516,7 +519,7 @@ fn verify_trusted_command(
     policy_path: &Path,
     signature_paths: &[PathBuf],
 ) -> Result<String, ProductError> {
-    let capsule_bytes = read_file(capsule_path)?;
+    let capsule_bytes = read_auth_capsule(capsule_path)?;
     let capsule = Capsule::decode(&capsule_bytes).map_err(|error| {
         ProductError::operation(format!(
             "invalid capsule {}: {error}",
@@ -558,10 +561,8 @@ fn verify_trusted_command(
     ))
 }
 
-fn read_file(path: &Path) -> Result<Vec<u8>, ProductError> {
-    fs::read(path).map_err(|error| {
-        ProductError::operation(format!("cannot read {}: {error}", path.display()))
-    })
+fn read_auth_capsule(path: &Path) -> Result<Vec<u8>, ProductError> {
+    read_regular_file_bounded(path, MAX_AUTH_CAPSULE_BYTES, "capsule input")
 }
 
 fn read_regular_utf8_bounded(
@@ -976,6 +977,34 @@ mod tests {
     }
 
     #[test]
+    fn authentication_capsule_input_rejects_oversized_regular_file_before_decode() {
+        let dir = test_dir("auth-oversized-capsule");
+        let oversized = dir.join("oversized.scicap");
+        let (private, _) = write_keys(&dir, 70);
+        let output = dir.join("oversized.sig");
+        let file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&oversized)
+            .unwrap();
+        file.set_len(MAX_AUTH_CAPSULE_BYTES + 1).unwrap();
+
+        let error = run_product(&[
+            "sign".to_owned(),
+            oversized.display().to_string(),
+            "--key".to_owned(),
+            private.display().to_string(),
+            "--output".to_owned(),
+            output.display().to_string(),
+        ])
+        .unwrap_err();
+        assert!(error.to_string().contains("capsule input"));
+        assert!(error.to_string().contains("read limit"));
+        assert!(!output.exists());
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
     fn sign_and_policy_creation_never_overwrite_existing_outputs() {
         let dir = test_dir("no-clobber");
         let capsule = pack_capsule(&dir);
@@ -1004,6 +1033,62 @@ mod tests {
             .to_string()
             .contains("cannot create new trust policy"));
         assert_eq!(fs::read(&policy).unwrap(), b"existing-policy");
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn authentication_commands_reject_symlink_capsule_inputs() {
+        use std::os::unix::fs::symlink;
+
+        let dir = test_dir("auth-capsule-symlink");
+        let capsule = pack_capsule(&dir);
+        let linked_capsule = dir.join("linked.scicap");
+        let (private, public) = write_keys(&dir, 62);
+        let signature = dir.join("demo.sig");
+        let policy = dir.join("policy.json");
+        symlink(&capsule, &linked_capsule).unwrap();
+        sign_file(&capsule, &private, &signature);
+        create_policy(&policy, 1, &[("release", public.as_path())]).unwrap();
+
+        let sign_error = run_product(&[
+            "sign".to_owned(),
+            linked_capsule.display().to_string(),
+            "--key".to_owned(),
+            private.display().to_string(),
+            "--output".to_owned(),
+            dir.join("linked.sig").display().to_string(),
+        ])
+        .unwrap_err();
+        assert!(sign_error
+            .to_string()
+            .contains("safely open capsule input"));
+
+        let verify_error = run_product(&[
+            "verify-signature".to_owned(),
+            linked_capsule.display().to_string(),
+            "--signature".to_owned(),
+            signature.display().to_string(),
+            "--key".to_owned(),
+            public.display().to_string(),
+        ])
+        .unwrap_err();
+        assert!(verify_error
+            .to_string()
+            .contains("safely open capsule input"));
+
+        let trusted_error = run_product(&[
+            "verify-trusted".to_owned(),
+            linked_capsule.display().to_string(),
+            "--policy".to_owned(),
+            policy.display().to_string(),
+            "--signature".to_owned(),
+            signature.display().to_string(),
+        ])
+        .unwrap_err();
+        assert!(trusted_error
+            .to_string()
+            .contains("safely open capsule input"));
         fs::remove_dir_all(dir).unwrap();
     }
 
