@@ -207,12 +207,8 @@ fn parse(args: &[String]) -> Result<RunCommand, ProductError> {
                 timeout_seen = true;
             }
             "--max-output-bytes" => {
-                let raw = take_unique_value(
-                    rest,
-                    &mut index,
-                    "--max-output-bytes",
-                    max_output_seen,
-                )?;
+                let raw =
+                    take_unique_value(rest, &mut index, "--max-output-bytes", max_output_seen)?;
                 max_output_bytes = raw.parse().map_err(|_| {
                     ProductError::usage("--max-output-bytes requires a positive integer")
                 })?;
@@ -321,7 +317,11 @@ fn validate_argument_limits(arguments: &[String]) -> Result<(), ProductError> {
     Ok(())
 }
 
-fn capture_stream<R: Read>(mut reader: R, maximum_bytes: u64, label: &'static str) -> CaptureOutcome {
+fn capture_stream<R: Read>(
+    mut reader: R,
+    maximum_bytes: u64,
+    label: &'static str,
+) -> CaptureOutcome {
     let mut bytes = Vec::new();
     let mut buffer = [0_u8; 8192];
     loop {
@@ -340,7 +340,9 @@ fn capture_stream<R: Read>(mut reader: R, maximum_bytes: u64, label: &'static st
             Err(_) => {
                 return CaptureOutcome {
                     bytes,
-                    error: Some(format!("captured {label} size cannot be represented as u64")),
+                    error: Some(format!(
+                        "captured {label} size cannot be represented as u64"
+                    )),
                 };
             }
         };
@@ -366,10 +368,7 @@ fn capture_stream<R: Read>(mut reader: R, maximum_bytes: u64, label: &'static st
     CaptureOutcome { bytes, error: None }
 }
 
-fn join_capture(
-    handle: thread::JoinHandle<CaptureOutcome>,
-    label: &'static str,
-) -> CaptureOutcome {
+fn join_capture(handle: thread::JoinHandle<CaptureOutcome>, label: &'static str) -> CaptureOutcome {
     handle.join().unwrap_or_else(|_| CaptureOutcome {
         bytes: Vec::new(),
         error: Some(format!("{label} capture thread panicked")),
@@ -780,10 +779,8 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn timeout_terminates_entrypoint_process_group_and_returns_structured_result() {
-        let (_dir, capsule, signature, policy) = trusted_fixture(
-            b"#!/bin/sh\nprintf before-timeout\n/bin/sleep 5\n",
-            84,
-        );
+        let (_dir, capsule, signature, policy) =
+            trusted_fixture(b"#!/bin/sh\nprintf before-timeout\n/bin/sleep 5\n", 84);
         let error = run(&[
             "run".to_owned(),
             capsule.display().to_string(),
