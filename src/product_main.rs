@@ -442,9 +442,10 @@ fn write_new_file(path: &Path, bytes: &[u8]) -> Result<(), ProductError> {
 mod tests {
     use super::*;
     use ed25519_dalek::{
-        pkcs8::{EncodePrivateKey, EncodePublicKey, LineEnding},
+        pkcs8::{EncodePrivateKey, EncodePublicKey},
         SigningKey,
     };
+    use pkcs8::LineEnding;
     use std::time::{SystemTime, UNIX_EPOCH};
 
     fn args(values: &[&str]) -> Vec<String> {
