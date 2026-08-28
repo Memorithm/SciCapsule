@@ -169,10 +169,7 @@ fn trusted_hub_contract_executes_exact_capsule_and_emits_machine_result() {
 fn untrusted_hub_request_fails_before_payload_and_does_not_create_result() {
     let dir = tempfile::tempdir().expect("tempdir");
     let marker = dir.path().join("marker");
-    let capsule = pack_capsule(
-        dir.path(),
-        b"#!/bin/sh\nprintf ran > \"$MARKER\"\n",
-    );
+    let capsule = pack_capsule(dir.path(), b"#!/bin/sh\nprintf ran > \"$MARKER\"\n");
     let (_trusted_private, trusted_public) = write_keypair(dir.path(), 102, "trusted");
     let (untrusted_private, _untrusted_public) = write_keypair(dir.path(), 103, "untrusted");
     let untrusted_signature = dir.path().join("untrusted.sig");
