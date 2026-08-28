@@ -42,17 +42,20 @@ strict signature verification. Private keys are accepted as PKCS#8 PEM and
 public keys as SPKI PEM.
 
 The signed message contains a SciCapsule v1 domain-separation prefix followed
-by the exact canonical capsule bytes. `sign` first requires the capsule to pass
-canonical decode. `verify-signature` likewise validates the capsule before
-accepting a signature.
+by the exact canonical capsule bytes. `sign` and `verify-signature` first read
+the capsule through the same regular-file/no-follow gate used for other
+security-sensitive product inputs. Their capsule read is bounded to the
+product default allowance: 1 GiB of payload bytes plus 16 MiB of capsule
+metadata. `Capsule::decode` remains the canonical integrity/encoding authority
+after that resource gate.
 
 The v1 envelope carries only its version, algorithm identifier, and 64-byte
 signature. It deliberately carries no trusted public key. The caller must
 provide a public key separately, so signer-controlled metadata cannot become a
 trust anchor merely by being present in the sidecar.
 
-Signature and key sidecars are size-bounded. On Unix they are opened with
-no-follow semantics. Signature output uses create-new semantics and is not
+Capsule, signature and key inputs are size-bounded. On Unix they are opened
+with no-follow semantics. Signature output uses create-new semantics and is not
 silently overwritten. The exact wire contract and non-goals are documented in
 [`SIGNATURES.md`](SIGNATURES.md).
 
@@ -69,16 +72,19 @@ invalid key names, unsupported algorithms or versions, impossible thresholds,
 and policies larger than the configured limits. Policy output uses create-new
 semantics.
 
-`verify-trusted` first requires canonical `Capsule::decode` to succeed, then
-loads the local policy and detached signature envelopes. It never learns trust
-anchors from capsule bytes or signature metadata. A trusted key contributes at
-most one unit toward the threshold regardless of how many matching signature
-envelopes are supplied. Unknown signers contribute zero.
+`verify-trusted` first reads the capsule through the same bounded regular-file
+input gate used by `sign` and `verify-signature`, then requires canonical
+`Capsule::decode` to succeed before loading the local policy and detached
+signature envelopes. It never learns trust anchors from capsule bytes or
+signature metadata. A trusted key contributes at most one unit toward the
+threshold regardless of how many matching signature envelopes are supplied.
+Unknown signers contribute zero.
 
 Trust policies are limited to 64 configured keys and one evaluation accepts at
-most 64 signature envelopes. Policy and signature sidecars are size-bounded;
-on Unix they are opened with no-follow semantics. The exact policy wire format
-and evaluation rules are documented in [`TRUST_POLICY.md`](TRUST_POLICY.md).
+most 64 signature envelopes. Capsule, policy and signature inputs are
+size-bounded; on Unix they are opened with no-follow semantics. The exact policy
+wire format and evaluation rules are documented in
+[`TRUST_POLICY.md`](TRUST_POLICY.md).
 
 ## Execution v1 guarantees
 
