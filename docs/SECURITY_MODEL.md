@@ -80,6 +80,47 @@ most 64 signature envelopes. Policy and signature sidecars are size-bounded;
 on Unix they are opened with no-follow semantics. The exact policy wire format
 and evaluation rules are documented in [`TRUST_POLICY.md`](TRUST_POLICY.md).
 
+## Execution v1 guarantees
+
+`run` is an authorization-and-lifecycle layer above canonical `.scicap`; it does
+not modify the format. Execution v1 is implemented only on Unix. Other
+platforms fail closed rather than falling back to weaker process semantics.
+
+Before materialization or process creation, `run`:
+
+- reads the capsule through the bounded regular-file/no-follow path;
+- performs canonical `Capsule::decode` integrity validation;
+- requires an explicit local trust policy;
+- requires at least one detached signature and enforces the policy threshold;
+- enforces the same configurable materialization file-count and byte limits as
+  `extract`;
+- bounds the number and total bytes of explicit environment entries and
+  entrypoint arguments;
+- requires a positive wall-clock timeout no larger than 24 hours.
+
+Only after trust succeeds does `run` create a private temporary run directory
+and materialize the capsule with the extraction implementation. It resolves the
+entrypoint exclusively from the canonical manifest, verifies the materialized
+entrypoint is a regular file, and marks only that entrypoint executable. It does
+not consult `PATH` and does not invoke a shell around the entrypoint.
+
+The child starts with:
+
+- the materialized capsule root as its working directory;
+- the inherited environment cleared, followed only by explicitly requested
+  `--env NAME=VALUE` entries;
+- arguments after `--` passed verbatim;
+- null stdin;
+- inherited stdout and stderr;
+- a dedicated Unix process group.
+
+The process group is killed on timeout and is also cleaned up when the runner
+returns, preventing descendants from intentionally outliving the command. The
+private temporary materialization is removed when the run scope ends.
+
+The complete execution contract and its limits are documented in
+[`EXECUTION.md`](EXECUTION.md).
+
 ## Explicit non-guarantees
 
 - Integrity verification is not signature verification or trust evaluation.
@@ -88,10 +129,20 @@ and evaluation rules are documented in [`TRUST_POLICY.md`](TRUST_POLICY.md).
   execute code.
 - Trust policy v1 establishes only membership in a local key allowlist plus a
   distinct-key threshold. It does not provide signer identity, revocation,
-  expiration, timestamps, certificate chains, transparency, provenance, or
-  execution authorization.
-- Extraction is not process execution.
-- Future `run` support is not a hostile-code sandbox unless it applies real OS
-  isolation and reports that isolation explicitly.
-- The current atomic no-replace publication path fails closed on non-Unix
-  platforms rather than silently using a racy replacement operation.
+  expiration, timestamps, certificate chains, transparency, or provenance.
+- A valid SLSA/in-toto provenance statement is evidence about asserted build
+  provenance; it is not by itself execution authorization.
+- `run` is **not an OS sandbox**. It does not restrict payload filesystem
+  access outside the temporary tree, network access, syscalls, child-process
+  creation, credentials, user/group privileges, CPU consumption, memory
+  consumption, or other host resources beyond its stated file/byte/input and
+  wall-clock bounds.
+- A trust-policy decision means only that the configured signature threshold
+  authenticated the exact capsule bytes. It is not a claim that the payload is
+  benign.
+- Host-level isolation for hostile code must be supplied externally, for
+  example with an appropriately configured sandbox, container, VM, namespace,
+  seccomp policy, or equivalent platform mechanism.
+- The current atomic no-replace extraction publication and execution lifecycle
+  implementations fail closed on non-Unix platforms rather than silently using
+  weaker behavior.
