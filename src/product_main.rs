@@ -222,9 +222,8 @@ fn parse_verify_signature(args: &[String]) -> Result<ProductCommand, ProductErro
     Ok(ProductCommand::VerifySignature {
         capsule: capsule
             .ok_or_else(|| ProductError::usage("verify-signature requires a capsule file"))?,
-        signature: signature.ok_or_else(|| {
-            ProductError::usage("verify-signature requires --signature FILE")
-        })?,
+        signature: signature
+            .ok_or_else(|| ProductError::usage("verify-signature requires --signature FILE"))?,
         key: key
             .ok_or_else(|| ProductError::usage("verify-signature requires --key PUBLIC_KEY.pem"))?,
     })
@@ -248,7 +247,11 @@ fn take_unique_value(
         .ok_or_else(|| ProductError::usage(format!("{option} requires a value")))
 }
 
-fn sign_command(capsule_path: &Path, key_path: &Path, output: &Path) -> Result<String, ProductError> {
+fn sign_command(
+    capsule_path: &Path,
+    key_path: &Path,
+    output: &Path,
+) -> Result<String, ProductError> {
     let capsule_bytes = read_file(capsule_path)?;
     let capsule = Capsule::decode(&capsule_bytes).map_err(|error| {
         ProductError::operation(format!(
@@ -289,9 +292,8 @@ fn verify_signature_command(
         MAX_SIGNATURE_ENVELOPE_BYTES,
         "signature envelope",
     )?;
-    let envelope = SignatureEnvelope::from_json(&signature_bytes).map_err(|error| {
-        ProductError::operation(format!("invalid signature envelope: {error}"))
-    })?;
+    let envelope = SignatureEnvelope::from_json(&signature_bytes)
+        .map_err(|error| ProductError::operation(format!("invalid signature envelope: {error}")))?;
     let public_key = read_regular_utf8_bounded(key_path, MAX_KEY_FILE_BYTES, "public key")?;
     verify_capsule_signature(&capsule_bytes, &envelope, &public_key).map_err(|error| {
         ProductError::operation(format!("signature verification failed: {error}"))
@@ -306,8 +308,9 @@ fn verify_signature_command(
 }
 
 fn read_file(path: &Path) -> Result<Vec<u8>, ProductError> {
-    fs::read(path)
-        .map_err(|error| ProductError::operation(format!("cannot read {}: {error}", path.display())))
+    fs::read(path).map_err(|error| {
+        ProductError::operation(format!("cannot read {}: {error}", path.display()))
+    })
 }
 
 fn read_regular_utf8_bounded(
@@ -331,7 +334,10 @@ fn read_regular_file_bounded(
         .ok_or_else(|| ProductError::operation("configured read limit is too large"))?;
     let file = open_regular_nofollow(path, label)?;
     let metadata = file.metadata().map_err(|error| {
-        ProductError::operation(format!("cannot inspect {label} {}: {error}", path.display()))
+        ProductError::operation(format!(
+            "cannot inspect {label} {}: {error}",
+            path.display()
+        ))
     })?;
     if !metadata.is_file() {
         return Err(ProductError::operation(format!(
@@ -386,7 +392,10 @@ fn open_regular_nofollow(path: &Path, label: &str) -> Result<File, ProductError>
 #[cfg(not(unix))]
 fn open_regular_nofollow(path: &Path, label: &str) -> Result<File, ProductError> {
     let metadata = fs::symlink_metadata(path).map_err(|error| {
-        ProductError::operation(format!("cannot inspect {label} {}: {error}", path.display()))
+        ProductError::operation(format!(
+            "cannot inspect {label} {}: {error}",
+            path.display()
+        ))
     })?;
     if !metadata.file_type().is_file() {
         return Err(ProductError::operation(format!(
@@ -609,7 +618,9 @@ mod tests {
             envelope.display().to_string(),
         ])
         .unwrap_err();
-        assert!(error.to_string().contains("cannot create new signature file"));
+        assert!(error
+            .to_string()
+            .contains("cannot create new signature file"));
         assert_eq!(fs::read(&envelope).unwrap(), b"existing");
         fs::remove_dir_all(dir).unwrap();
     }
