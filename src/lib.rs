@@ -512,8 +512,9 @@ mod tests {
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        let path =
-            std::env::temp_dir().join(format!("scicapsule-{label}-{}-{nonce}", std::process::id()));
+        let base = Path::new(env!("CARGO_MANIFEST_DIR")).join("target/test-tmp");
+        fs::create_dir_all(&base).unwrap();
+        let path = base.join(format!("scicapsule-{label}-{}-{nonce}", std::process::id()));
         fs::create_dir_all(&path).unwrap();
         path
     }

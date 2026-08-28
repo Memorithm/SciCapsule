@@ -324,9 +324,15 @@ mod tests {
         .unwrap()
     }
 
+    fn test_parent() -> tempfile::TempDir {
+        let base = Path::new(env!("CARGO_MANIFEST_DIR")).join("target/test-tmp");
+        fs::create_dir_all(&base).unwrap();
+        tempfile::Builder::new().tempdir_in(base).unwrap()
+    }
+
     #[test]
     fn preserves_payload_bytes_exactly() {
-        let parent = tempfile::tempdir().unwrap();
+        let parent = test_parent();
         let destination = parent.path().join("output");
         let bytes = [0, 1, 2, 0xff, b'\n'];
         let value = capsule(vec![("bin/run", &bytes), ("data/empty", b"")], "bin/run");
@@ -342,7 +348,7 @@ mod tests {
 
     #[test]
     fn rejects_file_directory_conflicts_before_writing() {
-        let parent = tempfile::tempdir().unwrap();
+        let parent = test_parent();
         let destination = parent.path().join("output");
         let value = capsule(vec![("bin", b"file"), ("bin/run", b"child")], "bin");
 
@@ -354,7 +360,7 @@ mod tests {
 
     #[test]
     fn enforces_file_and_byte_limits_before_writing() {
-        let parent = tempfile::tempdir().unwrap();
+        let parent = test_parent();
         let destination = parent.path().join("output");
         let value = capsule(vec![("bin/run", b"1234")], "bin/run");
 
@@ -387,7 +393,7 @@ mod tests {
     fn rejects_existing_symlink_destination() {
         use std::os::unix::fs::symlink;
 
-        let parent = tempfile::tempdir().unwrap();
+        let parent = test_parent();
         let outside = parent.path().join("outside");
         let destination = parent.path().join("output");
         fs::create_dir(&outside).unwrap();
@@ -424,7 +430,7 @@ mod tests {
 
     #[test]
     fn existing_regular_destination_is_never_overwritten() {
-        let parent = tempfile::tempdir().unwrap();
+        let parent = test_parent();
         let destination = parent.path().join("output");
         fs::write(&destination, b"keep me").unwrap();
         let value = capsule(vec![("bin/run", b"payload")], "bin/run");
