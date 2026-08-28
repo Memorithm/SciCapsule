@@ -1060,9 +1060,7 @@ mod tests {
             dir.join("linked.sig").display().to_string(),
         ])
         .unwrap_err();
-        assert!(sign_error
-            .to_string()
-            .contains("safely open capsule input"));
+        assert!(sign_error.to_string().contains("safely open capsule input"));
 
         let verify_error = run_product(&[
             "verify-signature".to_owned(),
