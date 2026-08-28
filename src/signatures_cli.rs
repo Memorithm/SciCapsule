@@ -99,9 +99,9 @@ pub(crate) fn run(args: &[String]) -> Result<String, CliError> {
             read_regular_input_bounded(&policy_path, MAX_TRUST_POLICY_BYTES, "trust policy")?;
         let policy = TrustPolicy::from_json(&encoded)
             .map_err(|error| CliError::operation(format!("invalid trust policy: {error}")))?;
-        let decision = policy.verify(&capsule_bytes, &envelopes).map_err(|error| {
-            CliError::operation(format!("trust verification failed: {error}"))
-        })?;
+        let decision = policy
+            .verify(&capsule_bytes, &envelopes)
+            .map_err(|error| CliError::operation(format!("trust verification failed: {error}")))?;
         Some(TrustSummary {
             trusted: true,
             matched_signers: decision.matched_signers,
@@ -126,7 +126,9 @@ pub(crate) fn run(args: &[String]) -> Result<String, CliError> {
         trust,
     };
     let mut output = serde_json::to_string_pretty(&result).map_err(|error| {
-        CliError::operation(format!("cannot serialize signature inspection result: {error}"))
+        CliError::operation(format!(
+            "cannot serialize signature inspection result: {error}"
+        ))
     })?;
     output.push('\n');
     Ok(output)
