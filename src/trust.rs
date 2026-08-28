@@ -125,11 +125,10 @@ impl TrustPolicy {
 
         let mut matched_signers = Vec::new();
         for trusted_key in &self.trusted_keys {
-            let key_bytes: [u8; ed25519_dalek::PUBLIC_KEY_LENGTH] = trusted_key
-                .public_key
-                .as_slice()
-                .try_into()
-                .map_err(|_| TrustPolicyError::new("invalid trusted Ed25519 public key length"))?;
+            let key_bytes: [u8; ed25519_dalek::PUBLIC_KEY_LENGTH] =
+                trusted_key.public_key.as_slice().try_into().map_err(|_| {
+                    TrustPolicyError::new("invalid trusted Ed25519 public key length")
+                })?;
             let verifying_key = VerifyingKey::from_bytes(&key_bytes).map_err(|_| {
                 TrustPolicyError::new(format!(
                     "trusted key {:?} is not a valid Ed25519 key",
@@ -139,7 +138,9 @@ impl TrustPolicy {
             let matched = signatures.iter().any(|bytes| {
                 Signature::try_from(bytes.as_slice())
                     .ok()
-                    .is_some_and(|signature| verifying_key.verify_strict(message, &signature).is_ok())
+                    .is_some_and(|signature| {
+                        verifying_key.verify_strict(message, &signature).is_ok()
+                    })
             });
             if matched {
                 matched_signers.push(trusted_key.name.clone());
@@ -387,7 +388,10 @@ mod tests {
             .verify_raw_ed25519_signatures(message, &[alpha.clone(), alpha])
             .is_err());
         let decision = policy
-            .verify_raw_ed25519_signatures(message, &[beta, alpha_key.sign(message).to_bytes().to_vec()])
+            .verify_raw_ed25519_signatures(
+                message,
+                &[beta, alpha_key.sign(message).to_bytes().to_vec()],
+            )
             .unwrap();
         assert_eq!(decision.matched_signers, vec!["alpha", "beta"]);
     }
