@@ -585,7 +585,10 @@ fn write_new_capsule(path: &Path, bytes: &[u8]) -> Result<(), CliError> {
         .write_all(bytes)
         .and_then(|()| file.sync_all())
         .map_err(|error| {
-            CliError::operation(format!("cannot write capsule output {}: {error}", path.display()))
+            CliError::operation(format!(
+                "cannot write capsule output {}: {error}",
+                path.display()
+            ))
         });
     if result.is_err() {
         let _ = fs::remove_file(path);
