@@ -79,10 +79,43 @@ scicapsule verify-signature demo.scicap \
 does not trust key material from the signature envelope: the verification key
 must be provided separately by the caller. A valid signature therefore proves
 only that the exact canonical capsule bytes were signed by the holder of the
-corresponding private key; deciding whether that public key is trusted remains
-a separate policy decision.
+corresponding private key.
 
-`inspect`, `verify`, `extract`, `sign`, and `verify-signature` all preserve the
-canonical format boundary. Signature trust, provenance policy, and execution
-are separate product layers. See [the security model](docs/SECURITY_MODEL.md)
-and [the detached signature specification](docs/SIGNATURES.md).
+## Explicit trust policies
+
+Trust policy v1 promotes explicitly selected public keys into local trust
+anchors without adding trust metadata to `.scicap` or to signature envelopes.
+Policies can require more than one distinct trusted signer.
+
+Create a policy requiring two of three configured keys:
+
+```text
+scicapsule create-trust-policy \
+  --output release-policy.json \
+  --require 2 \
+  release-a=release-a-public.pem \
+  release-b=release-b-public.pem \
+  recovery=recovery-public.pem
+```
+
+Then evaluate one or more detached signatures against that policy:
+
+```text
+scicapsule verify-trusted demo.scicap \
+  --policy release-policy.json \
+  --signature demo.release-a.sig \
+  --signature demo.release-b.sig
+```
+
+The threshold counts distinct trusted keys, not signature files. Repeating the
+same signature or producing multiple signatures from one trusted key cannot
+satisfy a multi-key threshold. Signatures from keys absent from the local
+policy do not count. Trust policies and security-sensitive sidecars are bounded
+and opened with no-follow semantics on Unix.
+
+`inspect`, `verify`, `extract`, `sign`, `verify-signature`, and
+`verify-trusted` preserve the canonical format boundary. Trust policy,
+provenance, and execution remain separate product layers. See
+[the security model](docs/SECURITY_MODEL.md),
+[the detached signature specification](docs/SIGNATURES.md), and
+[the trust policy specification](docs/TRUST_POLICY.md).

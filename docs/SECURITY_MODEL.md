@@ -56,14 +56,40 @@ no-follow semantics. Signature output uses create-new semantics and is not
 silently overwritten. The exact wire contract and non-goals are documented in
 [`SIGNATURES.md`](SIGNATURES.md).
 
+## Trust policy guarantees
+
+Trust policy v1 is local product configuration, separate from both `.scicap`
+and detached signature envelopes. It contains an explicit finite allowlist of
+raw Ed25519 public keys and a minimum number of distinct configured keys that
+must authenticate the capsule.
+
+`create-trust-policy` converts explicitly supplied SPKI PEM public keys into a
+self-contained JSON policy. It rejects duplicate names, duplicate public keys,
+invalid key names, unsupported algorithms or versions, impossible thresholds,
+and policies larger than the configured limits. Policy output uses create-new
+semantics.
+
+`verify-trusted` first requires canonical `Capsule::decode` to succeed, then
+loads the local policy and detached signature envelopes. It never learns trust
+anchors from capsule bytes or signature metadata. A trusted key contributes at
+most one unit toward the threshold regardless of how many matching signature
+envelopes are supplied. Unknown signers contribute zero.
+
+Trust policies are limited to 64 configured keys and one evaluation accepts at
+most 64 signature envelopes. Policy and signature sidecars are size-bounded;
+on Unix they are opened with no-follow semantics. The exact policy wire format
+and evaluation rules are documented in [`TRUST_POLICY.md`](TRUST_POLICY.md).
+
 ## Explicit non-guarantees
 
 - Integrity verification is not signature verification or trust evaluation.
 - A cryptographically valid signature does not establish that its public key is
   trusted, belongs to a claimed identity, is unrevoked, or is authorized to
   execute code.
-- Detached signature v1 does not provide timestamps, revocation, transparency,
-  certificate chains, threshold authorization, or network key discovery.
+- Trust policy v1 establishes only membership in a local key allowlist plus a
+  distinct-key threshold. It does not provide signer identity, revocation,
+  expiration, timestamps, certificate chains, transparency, provenance, or
+  execution authorization.
 - Extraction is not process execution.
 - Future `run` support is not a hostile-code sandbox unless it applies real OS
   isolation and reports that isolation explicitly.

@@ -94,9 +94,39 @@ pub fn verify_capsule_signature(
     envelope: &SignatureEnvelope,
     public_key_pem: &str,
 ) -> Result<(), SignatureModelError> {
-    envelope.validate()?;
     let verifying_key = VerifyingKey::from_public_key_pem(public_key_pem)
         .map_err(|_| SignatureModelError::new("invalid Ed25519 SPKI public key PEM"))?;
+    verify_capsule_signature_with_key(capsule_bytes, envelope, &verifying_key)
+}
+
+/// Verify a detached envelope against exactly 32 raw Ed25519 public-key bytes.
+///
+/// This is used by the trust-policy layer after the policy has independently
+/// established which keys are configured as trust anchors.
+pub fn verify_capsule_signature_with_public_key_bytes(
+    capsule_bytes: &[u8],
+    envelope: &SignatureEnvelope,
+    public_key: &[u8],
+) -> Result<(), SignatureModelError> {
+    let key_bytes: [u8; ed25519_dalek::PUBLIC_KEY_LENGTH] =
+        public_key.try_into().map_err(|_| {
+            SignatureModelError::new(format!(
+                "invalid Ed25519 public key length {}; expected {} bytes",
+                public_key.len(),
+                ed25519_dalek::PUBLIC_KEY_LENGTH
+            ))
+        })?;
+    let verifying_key = VerifyingKey::from_bytes(&key_bytes)
+        .map_err(|_| SignatureModelError::new("invalid Ed25519 public key bytes"))?;
+    verify_capsule_signature_with_key(capsule_bytes, envelope, &verifying_key)
+}
+
+fn verify_capsule_signature_with_key(
+    capsule_bytes: &[u8],
+    envelope: &SignatureEnvelope,
+    verifying_key: &VerifyingKey,
+) -> Result<(), SignatureModelError> {
+    envelope.validate()?;
     let signature = Signature::try_from(envelope.signature.as_slice())
         .map_err(|_| SignatureModelError::new("invalid Ed25519 signature bytes"))?;
     let message = signing_message(capsule_bytes);
@@ -139,7 +169,7 @@ mod tests {
     use ed25519_dalek::pkcs8::{EncodePrivateKey, EncodePublicKey};
     use pkcs8::LineEnding;
 
-    fn test_keys(seed: u8) -> (String, String) {
+    fn test_keys(seed: u8) -> (String, String, Vec<u8>) {
         let signing_key = SigningKey::from_bytes(&[seed; ed25519_dalek::SECRET_KEY_LENGTH]);
         let private_key = signing_key
             .to_pkcs8_pem(LineEnding::LF)
@@ -149,12 +179,13 @@ mod tests {
             .verifying_key()
             .to_public_key_pem(LineEnding::LF)
             .unwrap();
-        (private_key, public_key)
+        let raw_public_key = signing_key.verifying_key().to_bytes().to_vec();
+        (private_key, public_key, raw_public_key)
     }
 
     #[test]
     fn envelope_round_trip_is_versioned_and_strict() {
-        let (private_key, _) = test_keys(7);
+        let (private_key, _, _) = test_keys(7);
         let envelope = sign_capsule(b"capsule", &private_key).unwrap();
         let encoded = envelope.to_json().unwrap();
         let decoded = SignatureEnvelope::from_json(&encoded).unwrap();
@@ -169,19 +200,21 @@ mod tests {
 
     #[test]
     fn signature_verifies_only_for_exact_capsule_and_key() {
-        let (private_key, public_key) = test_keys(11);
-        let (_, other_public_key) = test_keys(12);
+        let (private_key, public_key, raw_public_key) = test_keys(11);
+        let (_, other_public_key, _) = test_keys(12);
         let capsule = b"exact canonical capsule bytes";
         let envelope = sign_capsule(capsule, &private_key).unwrap();
 
         verify_capsule_signature(capsule, &envelope, &public_key).unwrap();
+        verify_capsule_signature_with_public_key_bytes(capsule, &envelope, &raw_public_key)
+            .unwrap();
         assert!(verify_capsule_signature(b"tampered", &envelope, &public_key).is_err());
         assert!(verify_capsule_signature(capsule, &envelope, &other_public_key).is_err());
     }
 
     #[test]
     fn envelope_rejects_unsupported_version_algorithm_and_length() {
-        let (private_key, public_key) = test_keys(21);
+        let (private_key, public_key, _) = test_keys(21);
         let capsule = b"capsule";
         let envelope = sign_capsule(capsule, &private_key).unwrap();
 
@@ -200,11 +233,15 @@ mod tests {
 
     #[test]
     fn invalid_key_encodings_are_rejected() {
-        let (private_key, public_key) = test_keys(31);
+        let (private_key, public_key, _) = test_keys(31);
         let envelope = sign_capsule(b"capsule", &private_key).unwrap();
 
         assert!(sign_capsule(b"capsule", "not a private key").is_err());
         assert!(verify_capsule_signature(b"capsule", &envelope, "not a public key").is_err());
+        assert!(
+            verify_capsule_signature_with_public_key_bytes(b"capsule", &envelope, &[0; 31])
+                .is_err()
+        );
         verify_capsule_signature(b"capsule", &envelope, &public_key).unwrap();
     }
 }
