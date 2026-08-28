@@ -1,6 +1,9 @@
 #![forbid(unsafe_code)]
 
 pub mod extraction;
+pub mod signature;
+mod signatures_cli;
+pub mod trust;
 
 use scirust_capsule::{Capsule, CapsulePayload};
 use scirust_capsule_schema::CapsulePath;
@@ -31,7 +34,7 @@ pub const fn version() -> &'static str {
 
 /// Product CLI help.
 pub fn help_text() -> String {
-    format!(
+    let mut help = format!(
         "{PRODUCT_NAME} {}\n\
 Portable, reproducible SciRust execution capsules.\n\n\
 USAGE:\n\
@@ -61,7 +64,9 @@ OPTIONS:\n\
     -h, --help           Print help\n\
     -V, --version        Print version\n",
         version()
-    )
+    );
+    help.push_str(signatures_cli::help_text());
+    help
 }
 
 #[derive(Debug)]
@@ -122,6 +127,10 @@ enum Command {
 
 /// Parse and execute product CLI arguments (excluding argv[0]).
 pub fn run(args: &[String]) -> Result<String, CliError> {
+    if signatures_cli::handles(args) {
+        return signatures_cli::run(args);
+    }
+
     match parse_command(args)? {
         Command::Help => Ok(help_text()),
         Command::Version => Ok(format!("scicapsule {}\n", version())),
@@ -629,6 +638,7 @@ mod tests {
         assert!(help.contains("scicapsule inspect"));
         assert!(help.contains("scicapsule verify"));
         assert!(help.contains("scicapsule extract"));
+        assert!(help.contains("scicapsule signatures"));
         assert!(help.contains("--max-files N"));
         assert!(help.contains("--max-bytes N"));
     }
