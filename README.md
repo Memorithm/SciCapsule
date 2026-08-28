@@ -6,16 +6,25 @@ The reusable `.scicap` schema and deterministic container implementation live in
 
 ## Current CLI
 
-Create a deterministic capsule by mapping portable capsule paths to source files explicitly:
+Create a deterministic capsule by mapping portable capsule paths to regular
+source files explicitly:
 
 ```text
 scicapsule pack \
   --name demo \
   --entrypoint bin/run \
   --output demo.scicap \
+  --max-files 4096 \
+  --max-bytes 1073741824 \
   bin/run=./run.bin \
   data/input.bin=./input.bin
 ```
+
+`pack` bounds both payload count and aggregate payload bytes. On Unix each
+source is opened as a regular file with no-follow/nonblocking semantics. The
+output uses create-new semantics, is synchronized after a successful write, and
+never silently overwrites an existing path. These product limits do not change
+the canonical `.scicap` schema or deterministic encoding.
 
 Decode, fully verify, and print the manifest:
 
@@ -202,11 +211,14 @@ The Hub contract does not strengthen the execution boundary into an OS sandbox;
 it only makes the authorization and machine interface explicit and
 reproducible. See [the Hub contract specification](docs/HUB_CONTRACT.md).
 
-`inspect`, `verify`, `extract`, `sign`, `verify-signature`, `verify-trusted`,
-`run`, and the Hub adapter commands preserve the canonical format boundary.
-Trust policy, provenance, Hub orchestration, and execution remain separate
-product layers. See [the security model](docs/SECURITY_MODEL.md),
+`pack`, `inspect`, `verify`, `extract`, `sign`, `verify-signature`,
+`verify-trusted`, provenance commands, `run`, and the Hub adapter commands
+preserve the canonical format boundary. Trust policy, provenance, Hub
+orchestration, and execution remain separate product layers. See
+[the packing contract](docs/PACKING.md),
+[the security model](docs/SECURITY_MODEL.md),
 [the detached signature specification](docs/SIGNATURES.md),
 [the trust policy specification](docs/TRUST_POLICY.md),
+[the provenance contract](docs/PROVENANCE.md),
 [the execution security contract](docs/EXECUTION.md), and
 [the SciRust Hub contract](docs/HUB_CONTRACT.md).
