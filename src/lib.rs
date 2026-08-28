@@ -679,8 +679,11 @@ mod tests {
         symlink(&capsule, &linked_capsule).unwrap();
 
         for command in ["inspect", "verify"] {
-            let error = run(&[command.to_owned(), linked_capsule.display().to_string()]).unwrap_err();
-            assert!(error.to_string().contains("safely open regular capsule input"));
+            let error =
+                run(&[command.to_owned(), linked_capsule.display().to_string()]).unwrap_err();
+            assert!(error
+                .to_string()
+                .contains("safely open regular capsule input"));
         }
         fs::remove_dir_all(dir).unwrap();
     }
