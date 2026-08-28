@@ -1,7 +1,7 @@
 use crate::provenance::{DsseEnvelope, ProvenanceStatement};
 use crate::trust::{TrustPolicy, MAX_SIGNATURES};
 use crate::{
-    read_file, read_regular_file_bounded, read_regular_utf8_bounded, take_unique_value, take_value,
+    read_regular_file_bounded, read_regular_utf8_bounded, take_unique_value, take_value,
     write_new_file, ProductError, MAX_KEY_FILE_BYTES, MAX_TRUST_POLICY_BYTES,
 };
 use scirust_capsule::Capsule;
@@ -333,6 +333,12 @@ fn verify_command(
         verified.trust.matched_signers.join(","),
         verified.trust.required_signatures
     ))
+}
+
+fn read_file(path: &Path) -> Result<Vec<u8>, ProductError> {
+    std::fs::read(path).map_err(|error| {
+        ProductError::operation(format!("cannot read {}: {error}", path.display()))
+    })
 }
 
 #[cfg(test)]
