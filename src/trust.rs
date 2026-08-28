@@ -1,7 +1,7 @@
 use crate::signature::{
     verify_capsule_signature_with_public_key_bytes, SignatureEnvelope, SIGNATURE_ALGORITHM,
 };
-use ed25519_dalek::{pkcs8::DecodePublicKey, VerifyingKey};
+use ed25519_dalek::{pkcs8::DecodePublicKey, Signature, VerifyingKey};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 use std::fmt;
@@ -82,18 +82,7 @@ impl TrustPolicy {
         signatures: &[SignatureEnvelope],
     ) -> Result<TrustDecision, TrustPolicyError> {
         self.validate()?;
-        if signatures.is_empty() {
-            return Err(TrustPolicyError::new(
-                "trust verification requires at least one signature envelope",
-            ));
-        }
-        if signatures.len() > MAX_SIGNATURES {
-            return Err(TrustPolicyError::new(format!(
-                "too many signature envelopes: {}; limit is {}",
-                signatures.len(),
-                MAX_SIGNATURES
-            )));
-        }
+        validate_signature_count(signatures.len())?;
 
         let mut matched_signers = Vec::new();
         for trusted_key in &self.trusted_keys {
@@ -109,7 +98,61 @@ impl TrustPolicy {
                 matched_signers.push(trusted_key.name.clone());
             }
         }
+        self.finish_decision(matched_signers)
+    }
 
+    /// Apply this policy's distinct-key threshold to raw Ed25519 signatures.
+    ///
+    /// `keyid` hints are intentionally absent from this interface. Callers pass
+    /// the exact authenticated message and signature bytes; every configured
+    /// trust anchor is tried and a given trusted key counts at most once.
+    pub fn verify_raw_ed25519_signatures(
+        &self,
+        message: &[u8],
+        signatures: &[Vec<u8>],
+    ) -> Result<TrustDecision, TrustPolicyError> {
+        self.validate()?;
+        validate_signature_count(signatures.len())?;
+        for signature in signatures {
+            if signature.len() != ed25519_dalek::SIGNATURE_LENGTH {
+                return Err(TrustPolicyError::new(format!(
+                    "invalid Ed25519 signature length {}; expected {} bytes",
+                    signature.len(),
+                    ed25519_dalek::SIGNATURE_LENGTH
+                )));
+            }
+        }
+
+        let mut matched_signers = Vec::new();
+        for trusted_key in &self.trusted_keys {
+            let key_bytes: [u8; ed25519_dalek::PUBLIC_KEY_LENGTH] =
+                trusted_key.public_key.as_slice().try_into().map_err(|_| {
+                    TrustPolicyError::new("invalid trusted Ed25519 public key length")
+                })?;
+            let verifying_key = VerifyingKey::from_bytes(&key_bytes).map_err(|_| {
+                TrustPolicyError::new(format!(
+                    "trusted key {:?} is not a valid Ed25519 key",
+                    trusted_key.name
+                ))
+            })?;
+            let matched = signatures.iter().any(|bytes| {
+                Signature::try_from(bytes.as_slice())
+                    .ok()
+                    .is_some_and(|signature| {
+                        verifying_key.verify_strict(message, &signature).is_ok()
+                    })
+            });
+            if matched {
+                matched_signers.push(trusted_key.name.clone());
+            }
+        }
+        self.finish_decision(matched_signers)
+    }
+
+    fn finish_decision(
+        &self,
+        matched_signers: Vec<String>,
+    ) -> Result<TrustDecision, TrustPolicyError> {
         if matched_signers.len() < self.minimum_signatures as usize {
             return Err(TrustPolicyError::new(format!(
                 "trust threshold not met: matched {} distinct trusted key(s), require {}",
@@ -201,6 +244,20 @@ impl TrustPolicy {
     }
 }
 
+fn validate_signature_count(count: usize) -> Result<(), TrustPolicyError> {
+    if count == 0 {
+        return Err(TrustPolicyError::new(
+            "trust verification requires at least one signature",
+        ));
+    }
+    if count > MAX_SIGNATURES {
+        return Err(TrustPolicyError::new(format!(
+            "too many signatures: {count}; limit is {MAX_SIGNATURES}"
+        )));
+    }
+    Ok(())
+}
+
 fn validate_key_name(name: &str) -> Result<(), TrustPolicyError> {
     if name.is_empty() {
         return Err(TrustPolicyError::new("trusted key name must not be empty"));
@@ -249,7 +306,7 @@ impl std::error::Error for TrustPolicyError {}
 mod tests {
     use super::*;
     use crate::signature::sign_capsule;
-    use ed25519_dalek::{pkcs8::EncodePublicKey, SigningKey};
+    use ed25519_dalek::{pkcs8::EncodePublicKey, Signer, SigningKey};
     use pkcs8::LineEnding;
 
     fn public_pem(seed: u8) -> String {
@@ -308,6 +365,34 @@ mod tests {
             )
             .unwrap();
         assert_eq!(decision.required_signatures, 2);
+        assert_eq!(decision.matched_signers, vec!["alpha", "beta"]);
+    }
+
+    #[test]
+    fn raw_signature_threshold_counts_each_key_once() {
+        let policy = TrustPolicy::from_named_pem_keys(
+            2,
+            vec![
+                ("alpha".to_owned(), public_pem(10)),
+                ("beta".to_owned(), public_pem(11)),
+            ],
+        )
+        .unwrap();
+        let message = b"authenticated statement bytes";
+        let alpha_key = SigningKey::from_bytes(&[10; ed25519_dalek::SECRET_KEY_LENGTH]);
+        let beta_key = SigningKey::from_bytes(&[11; ed25519_dalek::SECRET_KEY_LENGTH]);
+        let alpha = alpha_key.sign(message).to_bytes().to_vec();
+        let beta = beta_key.sign(message).to_bytes().to_vec();
+
+        assert!(policy
+            .verify_raw_ed25519_signatures(message, &[alpha.clone(), alpha])
+            .is_err());
+        let decision = policy
+            .verify_raw_ed25519_signatures(
+                message,
+                &[beta, alpha_key.sign(message).to_bytes().to_vec()],
+            )
+            .unwrap();
         assert_eq!(decision.matched_signers, vec!["alpha", "beta"]);
     }
 

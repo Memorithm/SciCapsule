@@ -1,5 +1,7 @@
 #![forbid(unsafe_code)]
 
+mod provenance;
+mod provenance_cli;
 mod signature;
 mod trust;
 
@@ -99,6 +101,10 @@ fn main() -> ExitCode {
 }
 
 fn run_product(args: &[String]) -> Result<String, ProductError> {
+    if provenance_cli::handles(args) {
+        return provenance_cli::run(args);
+    }
+
     match parse_product_command(args)? {
         ProductCommand::Help => Ok(help_text()),
         ProductCommand::Delegate => scicapsule::run(args).map_err(ProductError::from_core),
@@ -144,6 +150,7 @@ SIGNATURE AND TRUST OPTIONS:\n\
     --policy FILE       Local trust-policy JSON file\n\
     --require N         Minimum number of distinct trusted signing keys required\n",
     );
+    help.push_str(provenance_cli::help_text());
     help
 }
 
@@ -773,6 +780,8 @@ mod tests {
         assert!(help.contains("scicapsule verify-signature FILE"));
         assert!(help.contains("scicapsule create-trust-policy"));
         assert!(help.contains("scicapsule verify-trusted FILE"));
+        assert!(help.contains("scicapsule attest-provenance FILE"));
+        assert!(help.contains("scicapsule verify-provenance FILE"));
         assert!(help.contains("verify canonical encoding, lengths, and payload SHA-256"));
     }
 
