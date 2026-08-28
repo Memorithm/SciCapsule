@@ -288,6 +288,7 @@ dependencies = [
 name = "scicapsule"
 version = "0.1.0"
 dependencies = [
+ "base64ct",
  "ed25519-dalek",
  "pkcs8",
  "rustix",
@@ -295,6 +296,7 @@ dependencies = [
  "scirust-capsule-schema",
  "serde",
  "serde_json",
+ "sha2",
  "tempfile",
 ]
 
