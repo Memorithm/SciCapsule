@@ -1,3 +1,6 @@
+#[path = "hub_cli.rs"]
+mod hub_cli;
+
 use crate::signature::SignatureEnvelope;
 use crate::trust::{TrustPolicy, MAX_SIGNATURES};
 use crate::{
@@ -36,7 +39,7 @@ struct RunCommand {
 }
 
 pub(crate) fn handles(args: &[String]) -> bool {
-    matches!(args.first().map(String::as_str), Some("run"))
+    matches!(args.first().map(String::as_str), Some("run")) || hub_cli::handles(args)
 }
 
 pub(crate) fn help_text() -> &'static str {
@@ -55,10 +58,21 @@ EXECUTION SECURITY BOUNDARY:\n\
     The v1 runner is Unix-only and fail-closed elsewhere. It uses a private materialization,\n\
     a dedicated process group, a wall-clock timeout, null stdin, and an empty inherited environment.\n\
     It is NOT an OS sandbox: filesystem, network, memory, CPU, syscall, and privilege isolation are\n\
-    not claimed by this command. Use an external sandbox/container when those controls are required.\n"
+    not claimed by this command. Use an external sandbox/container when those controls are required.\n\n\
+SCIRUST HUB COMMANDS:\n\
+    scicapsule create-hub-request --output REQUEST.json --signature FILE.sig [--signature FILE.sig ...] [run options] [-- ARG ...]\n\
+    scicapsule hub-run --capsule FILE --policy POLICY.json --request REQUEST.json --result RESULT.json\n\
+    scicapsule hub-manifest --component-id UUID --program /absolute/path/to/scicapsule --output COMPONENT.json\n\n\
+    create-hub-request  Build a deterministic, versioned Hub execution request artifact\n\
+    hub-run             Execute a Hub request through the same trusted run security gate\n\
+    hub-manifest        Emit a deterministic SciRust Hub component manifest v1\n"
 }
 
 pub(crate) fn run(args: &[String]) -> Result<String, ProductError> {
+    if hub_cli::handles(args) {
+        return hub_cli::run(args);
+    }
+
     #[cfg(not(unix))]
     {
         let _ = args;
