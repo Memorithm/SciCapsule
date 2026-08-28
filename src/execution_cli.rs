@@ -2,30 +2,41 @@
 mod hub_cli;
 
 use crate::signature::SignatureEnvelope;
-use crate::trust::{TrustPolicy, MAX_SIGNATURES};
+use crate::trust::{TrustDecision, TrustPolicy, MAX_SIGNATURES};
 use crate::{
     read_regular_file_bounded, take_unique_value, take_value, ProductError,
     MAX_SIGNATURE_ENVELOPE_BYTES, MAX_TRUST_POLICY_BYTES,
 };
+use base64ct::{Base64, Encoding};
 use scicapsule::extraction::{
     extract_capsule, ExtractionLimits, DEFAULT_EXTRACTION_LIMITS, MAX_CAPSULE_METADATA_BYTES,
 };
 use scirust_capsule::Capsule;
+use serde::Serialize;
 use std::collections::BTreeSet;
 use std::fs;
+use std::io::Read;
 #[cfg(all(test, unix))]
 use std::path::Path;
 use std::path::PathBuf;
-use std::process::{Command, Stdio};
+use std::process::{Command, ExitStatus, Stdio};
+#[cfg(unix)]
+use std::sync::Mutex;
 use std::thread;
 use std::time::{Duration, Instant};
 
+const EXECUTION_RESULT_SCHEMA_VERSION: u32 = 1;
 const DEFAULT_TIMEOUT_SECONDS: u64 = 300;
 const MAX_TIMEOUT_SECONDS: u64 = 86_400;
+const DEFAULT_MAX_OUTPUT_BYTES: u64 = 16 * 1024 * 1024;
+const MAX_OUTPUT_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_ENVIRONMENT_ENTRIES: usize = 128;
 const MAX_ENVIRONMENT_BYTES: usize = 64 * 1024;
 const MAX_ARGUMENTS: usize = 256;
 const MAX_ARGUMENT_BYTES: usize = 64 * 1024;
+
+#[cfg(unix)]
+static EXECUTION_SPAWN_LOCK: Mutex<()> = Mutex::new(());
 
 #[derive(Debug, Eq, PartialEq)]
 struct RunCommand {
@@ -34,8 +45,39 @@ struct RunCommand {
     signatures: Vec<PathBuf>,
     limits: ExtractionLimits,
     timeout_seconds: u64,
+    max_output_bytes: u64,
     environment: Vec<(String, String)>,
     arguments: Vec<String>,
+}
+
+#[derive(Debug)]
+struct CaptureOutcome {
+    bytes: Vec<u8>,
+    error: Option<String>,
+}
+
+#[derive(Debug, Eq, PartialEq, Serialize)]
+struct ExecutionResult {
+    schema_version: u32,
+    status: &'static str,
+    capsule_name: String,
+    entrypoint: String,
+    matched_signers: Vec<String>,
+    required_signatures: u32,
+    exit_code: Option<i32>,
+    stdout_base64: String,
+    stderr_base64: String,
+    capture_errors: Vec<String>,
+}
+
+impl ExecutionResult {
+    fn to_json(&self) -> Result<String, ProductError> {
+        let mut encoded = serde_json::to_string_pretty(self).map_err(|error| {
+            ProductError::operation(format!("cannot serialize execution result: {error}"))
+        })?;
+        encoded.push('\n');
+        Ok(encoded)
+    }
 }
 
 pub(crate) fn handles(args: &[String]) -> bool {
@@ -44,21 +86,27 @@ pub(crate) fn handles(args: &[String]) -> bool {
 
 pub(crate) fn help_text() -> &'static str {
     "\nEXECUTION COMMAND:\n\
-    scicapsule run FILE --policy POLICY.json --signature FILE.sig [--signature FILE.sig ...] [--timeout-seconds N] [--max-files N] [--max-bytes N] [--env NAME=VALUE ...] [-- ARG ...]\n\n\
-    run                  Verify trust, materialize privately, and execute the exact manifest entrypoint\n\n\
+    scicapsule run FILE --policy POLICY.json --signature FILE.sig [--signature FILE.sig ...] [--timeout-seconds N] [--max-files N] [--max-bytes N] [--max-output-bytes N] [--env NAME=VALUE ...] [-- ARG ...]\n\n\
+    run                  Verify trust, materialize privately, execute the exact manifest entrypoint, and emit a JSON result\n\n\
 EXECUTION OPTIONS:\n\
     --policy FILE        Required local trust-policy JSON; execution never trusts an embedded key\n\
     --signature FILE     Required detached signature envelope; repeatable for threshold policies\n\
     --timeout-seconds N  Wall-clock limit in seconds (default: 300; maximum: 86400)\n\
     --max-files N        Maximum materialized payload files (default: 4096)\n\
     --max-bytes N        Maximum total materialized payload bytes (default: 1073741824)\n\
+    --max-output-bytes N Maximum captured bytes per stdout/stderr stream (default: 16777216; maximum: 67108864)\n\
     --env NAME=VALUE     Explicit environment entry; repeatable; inherited environment is cleared\n\
     -- ARG ...           Arguments passed verbatim to the manifest entrypoint; no shell is used\n\n\
+EXECUTION RESULT:\n\
+    stdout and stderr are captured separately and returned as base64 in a versioned JSON result.\n\
+    Timeout, output-capture failure, and nonzero exit remain command failures; their ProductError\n\
+    payload is the same structured JSON result so callers can inspect captured output.\n\n\
 EXECUTION SECURITY BOUNDARY:\n\
     The v1 runner is Unix-only and fail-closed elsewhere. It uses a private materialization,\n\
-    a dedicated process group, a wall-clock timeout, null stdin, and an empty inherited environment.\n\
-    It is NOT an OS sandbox: filesystem, network, memory, CPU, syscall, and privilege isolation are\n\
-    not claimed by this command. Use an external sandbox/container when those controls are required.\n\n\
+    a dedicated process group, a wall-clock timeout, null stdin, an empty inherited environment,\n\
+    and bounded stdout/stderr capture. It is NOT an OS sandbox: filesystem, network, memory, CPU,\n\
+    syscall, and privilege isolation are not claimed by this command. Use an external\n\
+    sandbox/container when those controls are required.\n\n\
 SCIRUST HUB COMMANDS:\n\
     scicapsule create-hub-request --output REQUEST.json --signature FILE.sig [--signature FILE.sig ...] [run options] [-- ARG ...]\n\
     scicapsule hub-run --capsule FILE --policy POLICY.json --request REQUEST.json --result RESULT.json\n\
@@ -101,9 +149,11 @@ fn parse(args: &[String]) -> Result<RunCommand, ProductError> {
     let mut max_files = DEFAULT_EXTRACTION_LIMITS.max_files;
     let mut max_bytes = DEFAULT_EXTRACTION_LIMITS.max_total_bytes;
     let mut timeout_seconds = DEFAULT_TIMEOUT_SECONDS;
+    let mut max_output_bytes = DEFAULT_MAX_OUTPUT_BYTES;
     let mut max_files_seen = false;
     let mut max_bytes_seen = false;
     let mut timeout_seen = false;
+    let mut max_output_seen = false;
     let mut environment = Vec::new();
     let mut arguments = Vec::new();
     let mut index = 0;
@@ -161,6 +211,19 @@ fn parse(args: &[String]) -> Result<RunCommand, ProductError> {
                 }
                 timeout_seen = true;
             }
+            "--max-output-bytes" => {
+                let raw =
+                    take_unique_value(rest, &mut index, "--max-output-bytes", max_output_seen)?;
+                max_output_bytes = raw.parse().map_err(|_| {
+                    ProductError::usage("--max-output-bytes requires a positive integer")
+                })?;
+                if max_output_bytes == 0 || max_output_bytes > MAX_OUTPUT_BYTES {
+                    return Err(ProductError::usage(format!(
+                        "--max-output-bytes must be between 1 and {MAX_OUTPUT_BYTES}"
+                    )));
+                }
+                max_output_seen = true;
+            }
             "--env" => {
                 let raw = take_value(rest, &mut index, "--env")?;
                 environment.push(parse_environment(&raw)?);
@@ -196,6 +259,7 @@ fn parse(args: &[String]) -> Result<RunCommand, ProductError> {
             max_total_bytes: max_bytes,
         },
         timeout_seconds,
+        max_output_bytes,
         environment,
         arguments,
     })
@@ -258,6 +322,93 @@ fn validate_argument_limits(arguments: &[String]) -> Result<(), ProductError> {
     Ok(())
 }
 
+fn capture_stream<R: Read>(
+    mut reader: R,
+    maximum_bytes: u64,
+    label: &'static str,
+) -> CaptureOutcome {
+    let mut bytes = Vec::new();
+    let mut buffer = [0_u8; 8192];
+    loop {
+        let read = match reader.read(&mut buffer) {
+            Ok(0) => break,
+            Ok(read) => read,
+            Err(error) => {
+                return CaptureOutcome {
+                    bytes,
+                    error: Some(format!("cannot capture {label}: {error}")),
+                };
+            }
+        };
+        let current = match u64::try_from(bytes.len()) {
+            Ok(current) => current,
+            Err(_) => {
+                return CaptureOutcome {
+                    bytes,
+                    error: Some(format!(
+                        "captured {label} size cannot be represented as u64"
+                    )),
+                };
+            }
+        };
+        let next = match current.checked_add(read as u64) {
+            Some(next) => next,
+            None => {
+                return CaptureOutcome {
+                    bytes,
+                    error: Some(format!("captured {label} size overflow")),
+                };
+            }
+        };
+        if next > maximum_bytes {
+            return CaptureOutcome {
+                bytes,
+                error: Some(format!(
+                    "captured {label} exceeded the {maximum_bytes} byte output limit"
+                )),
+            };
+        }
+        bytes.extend_from_slice(&buffer[..read]);
+    }
+    CaptureOutcome { bytes, error: None }
+}
+
+fn join_capture(handle: thread::JoinHandle<CaptureOutcome>, label: &'static str) -> CaptureOutcome {
+    handle.join().unwrap_or_else(|_| CaptureOutcome {
+        bytes: Vec::new(),
+        error: Some(format!("{label} capture thread panicked")),
+    })
+}
+
+fn result_for(
+    capsule: &Capsule,
+    trust: &TrustDecision,
+    status: &'static str,
+    exit_status: ExitStatus,
+    stdout: CaptureOutcome,
+    stderr: CaptureOutcome,
+) -> ExecutionResult {
+    let mut capture_errors = Vec::new();
+    if let Some(error) = stdout.error {
+        capture_errors.push(error);
+    }
+    if let Some(error) = stderr.error {
+        capture_errors.push(error);
+    }
+    ExecutionResult {
+        schema_version: EXECUTION_RESULT_SCHEMA_VERSION,
+        status,
+        capsule_name: capsule.manifest().name().to_owned(),
+        entrypoint: capsule.manifest().entrypoint().to_string(),
+        matched_signers: trust.matched_signers.clone(),
+        required_signatures: trust.required_signatures,
+        exit_code: exit_status.code(),
+        stdout_base64: Base64::encode_string(&stdout.bytes),
+        stderr_base64: Base64::encode_string(&stderr.bytes),
+        capture_errors,
+    }
+}
+
 #[cfg(unix)]
 struct ProcessGroupGuard(rustix::process::Pid);
 
@@ -313,6 +464,16 @@ fn execute(command: RunCommand) -> Result<String, ProductError> {
         .verify(&capsule_bytes, &signatures)
         .map_err(|error| ProductError::operation(format!("execution trust failed: {error}")))?;
 
+    // Linux can return ETXTBSY when one thread forks while another thread still
+    // has a soon-to-be-executed file open for writing: the child temporarily
+    // inherits that writable descriptor until exec closes it. Serialize only
+    // SciCapsule's materialize-to-spawn window so concurrent executions in one
+    // process cannot create that race. The lock is released immediately after
+    // Command::spawn returns; payload execution itself remains concurrent.
+    let spawn_window = EXECUTION_SPAWN_LOCK.lock().map_err(|_| {
+        ProductError::operation("execution materialize/spawn serialization lock is poisoned")
+    })?;
+
     let materialization_parent = tempfile::Builder::new()
         .prefix("scicapsule-run-")
         .tempdir()
@@ -351,8 +512,8 @@ fn execute(command: RunCommand) -> Result<String, ProductError> {
         .current_dir(&summary.destination)
         .env_clear()
         .stdin(Stdio::null())
-        .stdout(Stdio::inherit())
-        .stderr(Stdio::inherit())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
         .process_group(0);
     for (name, value) in &command.environment {
         process.env(name, value);
@@ -364,26 +525,50 @@ fn execute(command: RunCommand) -> Result<String, ProductError> {
             capsule.manifest().entrypoint()
         ))
     })?;
+    drop(spawn_window);
+
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| ProductError::operation("cannot capture entrypoint stdout"))?;
+    let stderr = child
+        .stderr
+        .take()
+        .ok_or_else(|| ProductError::operation("cannot capture entrypoint stderr"))?;
+    let stdout_limit = command.max_output_bytes;
+    let stderr_limit = command.max_output_bytes;
+    let stdout_handle = thread::spawn(move || capture_stream(stdout, stdout_limit, "stdout"));
+    let stderr_handle = thread::spawn(move || capture_stream(stderr, stderr_limit, "stderr"));
+
     let process_group = ProcessGroupGuard(rustix::process::Pid::from_child(&child));
     let deadline = Instant::now()
         .checked_add(Duration::from_secs(command.timeout_seconds))
         .ok_or_else(|| ProductError::operation("execution deadline overflow"))?;
+    let mut timed_out = false;
 
     let status = loop {
         match child.try_wait() {
             Ok(Some(status)) => break status,
             Ok(None) if Instant::now() >= deadline => {
+                timed_out = true;
                 process_group.kill();
-                let _ = child.wait();
-                return Err(ProductError::operation(format!(
-                    "capsule execution timed out after {} second(s)",
-                    command.timeout_seconds
-                )));
+                match child.wait() {
+                    Ok(status) => break status,
+                    Err(error) => {
+                        let _ = join_capture(stdout_handle, "stdout");
+                        let _ = join_capture(stderr_handle, "stderr");
+                        return Err(ProductError::operation(format!(
+                            "cannot reap timed-out capsule entrypoint: {error}"
+                        )));
+                    }
+                }
             }
             Ok(None) => thread::sleep(Duration::from_millis(10)),
             Err(error) => {
                 process_group.kill();
                 let _ = child.wait();
+                let _ = join_capture(stdout_handle, "stdout");
+                let _ = join_capture(stderr_handle, "stderr");
                 return Err(ProductError::operation(format!(
                     "cannot wait for capsule entrypoint: {error}"
                 )));
@@ -391,20 +576,26 @@ fn execute(command: RunCommand) -> Result<String, ProductError> {
         }
     };
 
-    if !status.success() {
-        return Err(ProductError::operation(format!(
-            "capsule entrypoint exited unsuccessfully: {status}"
-        )));
-    }
+    let stdout = join_capture(stdout_handle, "stdout");
+    let stderr = join_capture(stderr_handle, "stderr");
+    let capture_failed = stdout.error.is_some() || stderr.error.is_some();
 
-    Ok(format!(
-        "executed {}: {} entrypoint={} matched [{}], require {}\n",
-        command.capsule.display(),
-        capsule.manifest().name(),
-        capsule.manifest().entrypoint(),
-        trust.matched_signers.join(","),
-        trust.required_signatures
-    ))
+    let status_name = if timed_out {
+        "timeout"
+    } else if capture_failed {
+        "capture-error"
+    } else if status.success() {
+        "success"
+    } else {
+        "nonzero"
+    };
+    let result = result_for(&capsule, &trust, status_name, status, stdout, stderr);
+    let encoded = result.to_json()?;
+
+    if timed_out || capture_failed || !status.success() {
+        return Err(ProductError::operation(encoded));
+    }
+    Ok(encoded)
 }
 
 #[cfg(test)]
@@ -446,10 +637,11 @@ mod tests {
             parsed.environment,
             vec![("LANG".to_owned(), "C".to_owned())]
         );
+        assert_eq!(parsed.max_output_bytes, DEFAULT_MAX_OUTPUT_BYTES);
     }
 
     #[test]
-    fn parser_rejects_duplicate_environment_and_unbounded_timeout() {
+    fn parser_rejects_duplicate_environment_and_unbounded_limits() {
         let duplicate = parse(&args(&[
             "run",
             "demo.scicap",
@@ -477,6 +669,19 @@ mod tests {
         ]))
         .unwrap_err();
         assert!(timeout.to_string().contains("between 1 and"));
+
+        let output = parse(&args(&[
+            "run",
+            "demo.scicap",
+            "--policy",
+            "policy.json",
+            "--signature",
+            "demo.sig",
+            "--max-output-bytes",
+            "0",
+        ]))
+        .unwrap_err();
+        assert!(output.to_string().contains("between 1 and"));
     }
 
     #[cfg(unix)]
@@ -530,9 +735,9 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn trusted_execution_runs_exact_entrypoint_with_explicit_environment_and_arguments() {
+    fn trusted_execution_captures_output_and_uses_explicit_environment_and_arguments() {
         let (_dir, capsule, signature, policy) = trusted_fixture(
-            b"#!/bin/sh\n[ \"$SCICAPSULE_TEST\" = \"ok\" ] || exit 21\n[ \"$1\" = \"--literal\" ] || exit 22\n[ \"$2\" = '$(false)' ] || exit 23\nexit 0\n",
+            b"#!/bin/sh\n[ \"$SCICAPSULE_TEST\" = \"ok\" ] || exit 21\n[ \"$1\" = \"--literal\" ] || exit 22\n[ \"$2\" = '$(false)' ] || exit 23\nprintf 'stdout-value\\n'\nprintf 'stderr-value\\n' >&2\nexit 0\n",
             81,
         );
         let result = run(&[
@@ -551,8 +756,18 @@ mod tests {
             "$(false)".to_owned(),
         ])
         .unwrap();
-        assert!(result.contains("executed"));
-        assert!(result.contains("matched [release]"));
+        let value: serde_json::Value = serde_json::from_str(&result).unwrap();
+        assert_eq!(value["schema_version"], EXECUTION_RESULT_SCHEMA_VERSION);
+        assert_eq!(value["status"], "success");
+        assert_eq!(value["matched_signers"], serde_json::json!(["release"]));
+        assert_eq!(
+            Base64::decode_vec(value["stdout_base64"].as_str().unwrap()).unwrap(),
+            b"stdout-value\n"
+        );
+        assert_eq!(
+            Base64::decode_vec(value["stderr_base64"].as_str().unwrap()).unwrap(),
+            b"stderr-value\n"
+        );
     }
 
     #[cfg(unix)]
@@ -580,8 +795,9 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn timeout_terminates_entrypoint_process_group() {
-        let (_dir, capsule, signature, policy) = trusted_fixture(b"#!/bin/sh\n/bin/sleep 5\n", 84);
+    fn timeout_terminates_entrypoint_process_group_and_returns_structured_result() {
+        let (_dir, capsule, signature, policy) =
+            trusted_fixture(b"#!/bin/sh\nprintf before-timeout\n/bin/sleep 5\n", 84);
         let error = run(&[
             "run".to_owned(),
             capsule.display().to_string(),
@@ -593,6 +809,64 @@ mod tests {
             "1".to_owned(),
         ])
         .unwrap_err();
-        assert!(error.to_string().contains("timed out after 1 second"));
+        let value: serde_json::Value = serde_json::from_str(error.to_string().trim()).unwrap();
+        assert_eq!(value["status"], "timeout");
+        assert_eq!(
+            Base64::decode_vec(value["stdout_base64"].as_str().unwrap()).unwrap(),
+            b"before-timeout"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn nonzero_exit_returns_structured_result_with_captured_output() {
+        let (_dir, capsule, signature, policy) = trusted_fixture(
+            b"#!/bin/sh\nprintf failed-out\nprintf failed-err >&2\nexit 7\n",
+            85,
+        );
+        let error = run(&[
+            "run".to_owned(),
+            capsule.display().to_string(),
+            "--policy".to_owned(),
+            policy.display().to_string(),
+            "--signature".to_owned(),
+            signature.display().to_string(),
+        ])
+        .unwrap_err();
+        let value: serde_json::Value = serde_json::from_str(error.to_string().trim()).unwrap();
+        assert_eq!(value["status"], "nonzero");
+        assert_eq!(value["exit_code"], 7);
+        assert_eq!(
+            Base64::decode_vec(value["stdout_base64"].as_str().unwrap()).unwrap(),
+            b"failed-out"
+        );
+        assert_eq!(
+            Base64::decode_vec(value["stderr_base64"].as_str().unwrap()).unwrap(),
+            b"failed-err"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn oversized_stdout_is_bounded_and_reported() {
+        let (_dir, capsule, signature, policy) =
+            trusted_fixture(b"#!/bin/sh\nprintf 123456789\nexit 0\n", 86);
+        let error = run(&[
+            "run".to_owned(),
+            capsule.display().to_string(),
+            "--policy".to_owned(),
+            policy.display().to_string(),
+            "--signature".to_owned(),
+            signature.display().to_string(),
+            "--max-output-bytes".to_owned(),
+            "8".to_owned(),
+        ])
+        .unwrap_err();
+        let value: serde_json::Value = serde_json::from_str(error.to_string().trim()).unwrap();
+        assert_eq!(value["status"], "capture-error");
+        assert!(value["capture_errors"][0]
+            .as_str()
+            .unwrap()
+            .contains("stdout exceeded"));
     }
 }
