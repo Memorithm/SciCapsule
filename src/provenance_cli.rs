@@ -28,7 +28,10 @@ enum ProvenanceCommand {
 }
 
 pub(crate) fn handles(args: &[String]) -> bool {
-    matches!(args.first().map(String::as_str), Some("attest-provenance" | "verify-provenance"))
+    matches!(
+        args.first().map(String::as_str),
+        Some("attest-provenance" | "verify-provenance")
+    )
 }
 
 pub(crate) fn run(args: &[String]) -> Result<String, ProductError> {
@@ -176,9 +179,8 @@ fn parse_attest(args: &[String]) -> Result<ProvenanceCommand, ProductError> {
             .ok_or_else(|| ProductError::usage("attest-provenance requires --build-type URI"))?,
         source_uri: source_uri
             .ok_or_else(|| ProductError::usage("attest-provenance requires --source URI"))?,
-        source_sha256: source_sha256.ok_or_else(|| {
-            ProductError::usage("attest-provenance requires --source-sha256 HEX")
-        })?,
+        source_sha256: source_sha256
+            .ok_or_else(|| ProductError::usage("attest-provenance requires --source-sha256 HEX"))?,
     })
 }
 
@@ -313,11 +315,14 @@ fn verify_command(
         MAX_PROVENANCE_ENVELOPE_BYTES,
         "provenance envelope",
     )?;
-    let envelope = DsseEnvelope::from_json(&provenance_bytes)
-        .map_err(|error| ProductError::operation(format!("invalid provenance envelope: {error}")))?;
+    let envelope = DsseEnvelope::from_json(&provenance_bytes).map_err(|error| {
+        ProductError::operation(format!("invalid provenance envelope: {error}"))
+    })?;
     let verified = envelope
         .verify_for_capsule(&capsule_bytes, &policy)
-        .map_err(|error| ProductError::operation(format!("provenance verification failed: {error}")))?;
+        .map_err(|error| {
+            ProductError::operation(format!("provenance verification failed: {error}"))
+        })?;
 
     Ok(format!(
         "verified provenance {}: {} builder={} build_type={} matched [{}], require {}\n",
@@ -424,11 +429,7 @@ mod tests {
 
     #[test]
     fn parser_requires_explicit_provenance_inputs() {
-        let error = parse(&[
-            "attest-provenance".to_owned(),
-            "demo.scicap".to_owned(),
-        ])
-        .unwrap_err();
+        let error = parse(&["attest-provenance".to_owned(), "demo.scicap".to_owned()]).unwrap_err();
         assert!(error.usage);
         assert!(error.to_string().contains("--key"));
 
@@ -453,7 +454,10 @@ mod tests {
         write_policy(
             &policy,
             2,
-            &[("builder-a", public_a.as_path()), ("builder-b", public_b.as_path())],
+            &[
+                ("builder-a", public_a.as_path()),
+                ("builder-b", public_b.as_path()),
+            ],
         );
 
         let created = run(&attest_args(
@@ -526,7 +530,9 @@ mod tests {
             policy.display().to_string(),
         ])
         .unwrap_err();
-        assert!(error.to_string().contains("safely open provenance envelope"));
+        assert!(error
+            .to_string()
+            .contains("safely open provenance envelope"));
         fs::remove_dir_all(dir).unwrap();
     }
 }
