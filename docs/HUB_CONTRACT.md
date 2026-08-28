@@ -87,8 +87,10 @@ fixed number of signature inputs in the Hub component manifest.
 
 ## Hub execution result v1
 
-A successful `hub-run` creates a new result file. Existing result paths are
-never overwritten by SciCapsule.
+A successful `hub-run` creates a new result file. If the result destination
+already exists as any filesystem object, including a symlink, `hub-run` refuses
+to execute the payload. Final publication still uses create-new semantics, so a
+concurrent destination appearing after the preflight is never overwritten.
 
 The result contains:
 
@@ -106,7 +108,10 @@ The result contains:
 
 The result is deterministic for the same capsule bytes, trust policy and
 successful request. It intentionally contains no timestamps, random IDs, host
-paths or platform-specific process identifiers.
+paths or platform-specific process identifiers. Its capsule digest, canonical
+manifest fields and matched-signers decision describe the same in-memory bytes
+that are pinned into private snapshots for execution; caller-controlled capsule
+or policy paths are not reopened after that decision.
 
 On trust failure, malformed input, extraction failure, timeout or non-zero
 entrypoint exit, `hub-run` returns non-zero and does not fabricate a success
@@ -117,13 +122,23 @@ outcome/provenance path.
 
 `hub-run` performs these gates before creating the payload process:
 
-1. bounded no-follow read of the request, capsule and trust policy where the
+1. reject an already-existing result destination using symlink-aware metadata;
+2. bounded no-follow read of the request, capsule and trust policy where the
    platform implementation supports those guarantees;
-2. strict request decode and validation;
-3. canonical `Capsule::decode` integrity validation;
-4. local trust-policy evaluation against the exact capsule bytes;
-5. delegation to the same trusted bounded execution path used by
-   `scicapsule run`.
+3. strict request decode and validation;
+4. canonical `Capsule::decode` integrity validation;
+5. local trust-policy evaluation against the exact capsule bytes;
+6. create a private temporary snapshot directory and write the exact verified
+   capsule bytes, exact parsed policy bytes and validated detached signature
+   envelopes into new files there;
+7. delegate to the same trusted bounded execution path used by `scicapsule run`,
+   using only those private snapshot paths.
+
+This pinning step closes the path-reopen reproducibility window between the
+Hub-facing trust decision and Phase 5 execution. Even if the caller replaces
+the original capsule or policy path after the bounded read, the delegated run
+continues against the already verified snapshot. The request itself is decoded
+once into memory and is not reopened for execution.
 
 The execution path then privately materializes the canonical payload, resolves
 only the canonical manifest entrypoint, clears the inherited environment,
@@ -142,6 +157,12 @@ The Hub's own executor timeout and capture limits are an outer control plane;
 the request's SciCapsule timeout and extraction bounds remain the inner capsule
 execution policy. Neither layer should claim stronger isolation than it
 actually implements.
+
+The early result-path check is a side-effect guard, not a filesystem
+reservation. A racing creator can still occupy that path after preflight; the
+final create-new write then fails closed instead of overwriting it. The payload
+may already have run in that narrow publication race, so callers needing
+transactional output reservation must provide that boundary externally.
 
 ## Versioning
 

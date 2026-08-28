@@ -180,11 +180,23 @@ placeholders as direct argv values. `hub-run` then performs canonical capsule
 validation and local trust authorization before delegating to the same bounded
 execution path as `scicapsule run`.
 
+After that authorization decision, `hub-run` pins the exact verified capsule
+bytes, exact policy bytes and validated signature envelopes into new files in a
+private temporary snapshot directory. The delegated runner receives only these
+snapshot paths, so replacing the original caller-controlled capsule or policy
+path cannot change the bytes executed after the Hub-facing trust decision.
+
 A successful result contains the exact capsule SHA-256, canonical manifest name
 and entrypoint, matched local signer names, and required signature threshold. It
-contains no timestamps, random IDs, host paths, or process IDs. On trust or
-execution failure, `hub-run` exits non-zero and does not fabricate a success
-result.
+therefore describes the same pinned bytes supplied to execution. It contains no
+timestamps, random IDs, host paths, or process IDs. On trust or execution
+failure, `hub-run` exits non-zero and does not fabricate a success result.
+
+`hub-run` also refuses an already-existing result destination before payload
+execution. Final result publication still uses create-new semantics, so a
+racing destination is never overwritten. That early check is not a
+transactional reservation: if a path appears only after preflight, execution
+may already have occurred before final publication fails closed.
 
 The Hub contract does not strengthen the execution boundary into an OS sandbox;
 it only makes the authorization and machine interface explicit and

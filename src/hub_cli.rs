@@ -390,6 +390,7 @@ fn hub_run(args: &[String]) -> Result<String, ProductError> {
         request.ok_or_else(|| ProductError::usage("hub-run requires --request FILE"))?;
     let result_path =
         result.ok_or_else(|| ProductError::usage("hub-run requires --result FILE"))?;
+    ensure_result_path_absent(&result_path)?;
 
     let request_bytes = read_regular_file_bounded(
         &request_path,
@@ -418,31 +419,32 @@ fn hub_run(args: &[String]) -> Result<String, ProductError> {
         .verify(&capsule_bytes, &request.signatures)
         .map_err(|error| ProductError::operation(format!("Hub execution trust failed: {error}")))?;
 
-    let signature_dir = tempfile::Builder::new()
-        .prefix("scicapsule-hub-signatures-")
+    // Pin the exact bytes that produced the trust decision. The Phase 5 runner
+    // reopens its inputs by path, so it must receive only private snapshots,
+    // never the caller-controlled paths that were verified above.
+    let snapshot_dir = tempfile::Builder::new()
+        .prefix("scicapsule-hub-inputs-")
         .tempdir()
         .map_err(|error| {
-            ProductError::operation(format!(
-                "cannot create private Hub signature directory: {error}"
-            ))
+            ProductError::operation(format!("cannot create private Hub input snapshot: {error}"))
         })?;
+    let capsule_snapshot = snapshot_dir.path().join("capsule.scicap");
+    let policy_snapshot = snapshot_dir.path().join("policy.json");
+    write_new_file(&capsule_snapshot, &capsule_bytes, "Hub capsule snapshot")?;
+    write_new_file(&policy_snapshot, &policy_bytes, "Hub trust-policy snapshot")?;
+
     let mut run_args = vec![
         "run".to_owned(),
-        capsule_path.display().to_string(),
+        capsule_snapshot.display().to_string(),
         "--policy".to_owned(),
-        policy_path.display().to_string(),
+        policy_snapshot.display().to_string(),
     ];
     for (index, signature) in request.signatures.iter().enumerate() {
-        let path = signature_dir.path().join(format!("signature-{index}.json"));
-        fs::write(
-            &path,
-            signature.to_json().map_err(|error| {
-                ProductError::operation(format!("cannot encode Hub request signature: {error}"))
-            })?,
-        )
-        .map_err(|error| {
-            ProductError::operation(format!("cannot materialize Hub request signature: {error}"))
+        let path = snapshot_dir.path().join(format!("signature-{index}.json"));
+        let encoded = signature.to_json().map_err(|error| {
+            ProductError::operation(format!("cannot encode Hub request signature: {error}"))
         })?;
+        write_new_file(&path, &encoded, "Hub signature snapshot")?;
         run_args.push("--signature".to_owned());
         run_args.push(path.display().to_string());
     }
@@ -479,6 +481,20 @@ fn hub_run(args: &[String]) -> Result<String, ProductError> {
         "wrote Hub execution result {}\n",
         result_path.display()
     ))
+}
+
+fn ensure_result_path_absent(path: &Path) -> Result<(), ProductError> {
+    match fs::symlink_metadata(path) {
+        Ok(_) => Err(ProductError::operation(format!(
+            "refusing to execute because Hub result destination {} already exists",
+            path.display()
+        ))),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(ProductError::operation(format!(
+            "cannot inspect Hub result destination {}: {error}",
+            path.display()
+        ))),
+    }
 }
 
 fn create_manifest(args: &[String]) -> Result<String, ProductError> {
