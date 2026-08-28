@@ -136,7 +136,8 @@ impl std::error::Error for SignatureModelError {}
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ed25519_dalek::pkcs8::{EncodePrivateKey, EncodePublicKey, LineEnding};
+    use ed25519_dalek::pkcs8::{EncodePrivateKey, EncodePublicKey};
+    use pkcs8::LineEnding;
 
     fn test_keys(seed: u8) -> (String, String) {
         let signing_key = SigningKey::from_bytes(&[seed; ed25519_dalek::SECRET_KEY_LENGTH]);
