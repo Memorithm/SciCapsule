@@ -287,7 +287,7 @@ mod tests {
     #[test]
     fn unknown_signer_does_not_satisfy_explicit_policy() {
         let (dir, capsule, _signature, policy) = fixture(93);
-        let (_, _, unknown_signature, _) = fixture(94);
+        let (_unknown_dir, _, unknown_signature, _) = fixture(94);
         let copied_unknown = dir.path().join("unknown.sig");
         fs::copy(unknown_signature, &copied_unknown).unwrap();
 
