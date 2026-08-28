@@ -144,9 +144,57 @@ container, VM, or other OS isolation layer when executing hostile payloads.
 Non-Unix execution fails closed rather than silently weakening these process
 lifecycle guarantees.
 
+## SciRust Hub contract
+
+SciCapsule exposes a versioned process contract for SciRust Hub without adding
+Hub metadata to `.scicap`. A Hub run uses three immutable input artifacts — the
+canonical capsule, the local trust policy, and a deterministic execution request
+containing detached signatures and bounded run options — and produces one
+required machine-readable result artifact.
+
+Create a request artifact from the signatures and run options:
+
+```text
+scicapsule create-hub-request \
+  --output request.json \
+  --signature demo.release-a.sig \
+  --signature demo.release-b.sig \
+  --timeout-seconds 30 \
+  --env LANG=C \
+  -- --example literal-argument
+```
+
+Generate a SciRust Hub schema-v1 component manifest. The executable path is
+explicit and absolute so Hub never relies on `PATH` lookup for the component:
+
+```text
+scicapsule hub-manifest \
+  --component-id 00000000-0000-0000-0000-000000000001 \
+  --program /opt/scicapsule/bin/scicapsule \
+  --output scicapsule-component.json
+```
+
+The generated component declares capability `capsule.execute`. Hub resolves its
+`{input:capsule}`, `{input:policy}`, `{input:request}`, and `{output:result}`
+placeholders as direct argv values. `hub-run` then performs canonical capsule
+validation and local trust authorization before delegating to the same bounded
+execution path as `scicapsule run`.
+
+A successful result contains the exact capsule SHA-256, canonical manifest name
+and entrypoint, matched local signer names, and required signature threshold. It
+contains no timestamps, random IDs, host paths, or process IDs. On trust or
+execution failure, `hub-run` exits non-zero and does not fabricate a success
+result.
+
+The Hub contract does not strengthen the execution boundary into an OS sandbox;
+it only makes the authorization and machine interface explicit and
+reproducible. See [the Hub contract specification](docs/HUB_CONTRACT.md).
+
 `inspect`, `verify`, `extract`, `sign`, `verify-signature`, `verify-trusted`,
-and `run` preserve the canonical format boundary. Trust policy, provenance, and
-execution remain separate product layers. See [the security model](docs/SECURITY_MODEL.md),
+`run`, and the Hub adapter commands preserve the canonical format boundary.
+Trust policy, provenance, Hub orchestration, and execution remain separate
+product layers. See [the security model](docs/SECURITY_MODEL.md),
 [the detached signature specification](docs/SIGNATURES.md),
-[the trust policy specification](docs/TRUST_POLICY.md), and
-[the execution security contract](docs/EXECUTION.md).
+[the trust policy specification](docs/TRUST_POLICY.md),
+[the execution security contract](docs/EXECUTION.md), and
+[the SciRust Hub contract](docs/HUB_CONTRACT.md).
