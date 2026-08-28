@@ -29,7 +29,14 @@ The Ed25519 message is the concatenation of:
    `SciCapsule detached signature v1` followed by one NUL byte; and
 2. the exact canonical `.scicap` bytes.
 
-The CLI first decodes the capsule using `scirust-capsule::Capsule::decode`.
+The CLI first reads the capsule through the product's regular-file bounded input
+gate and then decodes it using `scirust-capsule::Capsule::decode`. The
+authentication commands use the same default capsule allowance established by
+extraction/execution: 1 GiB of payload bytes plus 16 MiB of capsule metadata.
+On Unix the input is opened with no-follow and nonblocking flags, so capsule
+symlinks and special-file streams are rejected before decode.
+
+`Capsule::decode` remains the canonical encoding and integrity authority.
 Therefore malformed, non-canonical, length-inconsistent, or payload-corrupted
 capsules are rejected before signing or signature acceptance.
 
@@ -72,8 +79,9 @@ Create a detached signature:
 scicapsule sign CAPSULE --key PRIVATE_KEY.pem --output SIGNATURE_FILE
 ```
 
-The capsule must decode successfully before signing. The output path is opened
-with create-new semantics and is never silently overwritten.
+The capsule must pass the bounded regular-file input gate and decode
+successfully before signing. The output path is opened with create-new semantics
+and is never silently overwritten.
 
 Verify a detached signature:
 
@@ -85,8 +93,9 @@ scicapsule verify-signature CAPSULE \
 
 Verification succeeds only if both canonical capsule validation and strict
 Ed25519 verification succeed against the explicitly supplied public key.
-Signature-envelope and key-file reads are bounded. On Unix, these auxiliary
-inputs are opened with no-follow semantics so a symlink is rejected.
+Capsule, signature-envelope and key-file reads are bounded. On Unix these
+security-sensitive inputs are opened with no-follow semantics so symlinks are
+rejected.
 
 ## Non-goals of v1
 
