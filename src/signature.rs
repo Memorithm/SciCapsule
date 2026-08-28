@@ -30,8 +30,9 @@ pub struct SignatureEnvelope {
 impl SignatureEnvelope {
     /// Parse and structurally validate an envelope.
     pub fn from_json(encoded: &[u8]) -> Result<Self, SignatureModelError> {
-        let envelope: Self = serde_json::from_slice(encoded)
-            .map_err(|error| SignatureModelError::new(format!("invalid signature envelope JSON: {error}")))?;
+        let envelope: Self = serde_json::from_slice(encoded).map_err(|error| {
+            SignatureModelError::new(format!("invalid signature envelope JSON: {error}"))
+        })?;
         envelope.validate()?;
         Ok(envelope)
     }
