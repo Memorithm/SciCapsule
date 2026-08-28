@@ -243,11 +243,8 @@ fn attest_command(
     source_uri: &str,
     source_sha256: &str,
 ) -> Result<String, ProductError> {
-    let capsule_bytes = read_regular_file_bounded(
-        capsule_path,
-        DEFAULT_CAPSULE_READ_LIMIT,
-        "capsule input",
-    )?;
+    let capsule_bytes =
+        read_regular_file_bounded(capsule_path, DEFAULT_CAPSULE_READ_LIMIT, "capsule input")?;
     let capsule = Capsule::decode(&capsule_bytes).map_err(|error| {
         ProductError::operation(format!(
             "invalid capsule {}: {error}",
@@ -303,11 +300,8 @@ fn verify_command(
     provenance_path: &Path,
     policy_path: &Path,
 ) -> Result<String, ProductError> {
-    let capsule_bytes = read_regular_file_bounded(
-        capsule_path,
-        DEFAULT_CAPSULE_READ_LIMIT,
-        "capsule input",
-    )?;
+    let capsule_bytes =
+        read_regular_file_bounded(capsule_path, DEFAULT_CAPSULE_READ_LIMIT, "capsule input")?;
     let capsule = Capsule::decode(&capsule_bytes).map_err(|error| {
         ProductError::operation(format!(
             "invalid capsule {}: {error}",
@@ -500,7 +494,8 @@ mod tests {
         let file = fs::File::create(&oversized).unwrap();
         file.set_len(DEFAULT_CAPSULE_READ_LIMIT + 1).unwrap();
 
-        let attest_error = run(&attest_args(&oversized, &output, &[private.as_path()])).unwrap_err();
+        let attest_error =
+            run(&attest_args(&oversized, &output, &[private.as_path()])).unwrap_err();
         assert!(attest_error.to_string().contains("read limit"));
         assert!(!output.exists());
 
