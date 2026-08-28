@@ -1,4 +1,6 @@
-use crate::signature::{verify_capsule_signature_with_public_key_bytes, SignatureEnvelope, SIGNATURE_ALGORITHM};
+use crate::signature::{
+    verify_capsule_signature_with_public_key_bytes, SignatureEnvelope, SIGNATURE_ALGORITHM,
+};
 use ed25519_dalek::{pkcs8::DecodePublicKey, VerifyingKey};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
@@ -33,16 +35,18 @@ pub struct TrustDecision {
 
 impl TrustPolicy {
     pub fn from_json(encoded: &[u8]) -> Result<Self, TrustPolicyError> {
-        let policy: Self = serde_json::from_slice(encoded)
-            .map_err(|error| TrustPolicyError::new(format!("invalid trust policy JSON: {error}")))?;
+        let policy: Self = serde_json::from_slice(encoded).map_err(|error| {
+            TrustPolicyError::new(format!("invalid trust policy JSON: {error}"))
+        })?;
         policy.validate()?;
         Ok(policy)
     }
 
     pub fn to_json(&self) -> Result<Vec<u8>, TrustPolicyError> {
         self.validate()?;
-        let mut encoded = serde_json::to_vec_pretty(self)
-            .map_err(|error| TrustPolicyError::new(format!("cannot serialize trust policy: {error}")))?;
+        let mut encoded = serde_json::to_vec_pretty(self).map_err(|error| {
+            TrustPolicyError::new(format!("cannot serialize trust policy: {error}"))
+        })?;
         encoded.push(b'\n');
         Ok(encoded)
     }
@@ -182,7 +186,10 @@ impl TrustPolicy {
                 .try_into()
                 .map_err(|_| TrustPolicyError::new("invalid Ed25519 public key length"))?;
             VerifyingKey::from_bytes(&key_bytes).map_err(|_| {
-                TrustPolicyError::new(format!("trusted key {:?} is not a valid Ed25519 key", key.name))
+                TrustPolicyError::new(format!(
+                    "trusted key {:?} is not a valid Ed25519 key",
+                    key.name
+                ))
             })?;
             if !public_keys.insert(key.public_key.clone()) {
                 return Err(TrustPolicyError::new(
@@ -262,11 +269,9 @@ mod tests {
 
     #[test]
     fn policy_round_trip_is_versioned_and_strict() {
-        let policy = TrustPolicy::from_named_pem_keys(
-            1,
-            vec![("release".to_owned(), public_pem(1))],
-        )
-        .unwrap();
+        let policy =
+            TrustPolicy::from_named_pem_keys(1, vec![("release".to_owned(), public_pem(1))])
+                .unwrap();
         let encoded = policy.to_json().unwrap();
         assert_eq!(TrustPolicy::from_json(&encoded).unwrap(), policy);
 
@@ -292,7 +297,16 @@ mod tests {
         let duplicate_alpha = vec![alpha.clone(), alpha];
         assert!(policy.verify(capsule, &duplicate_alpha).is_err());
 
-        let decision = policy.verify(capsule, &[beta.clone(), beta, sign_capsule(capsule, &private_pem(2)).unwrap()]).unwrap();
+        let decision = policy
+            .verify(
+                capsule,
+                &[
+                    beta.clone(),
+                    beta,
+                    sign_capsule(capsule, &private_pem(2)).unwrap(),
+                ],
+            )
+            .unwrap();
         assert_eq!(decision.required_signatures, 2);
         assert_eq!(decision.matched_signers, vec!["alpha", "beta"]);
     }
@@ -300,11 +314,9 @@ mod tests {
     #[test]
     fn unknown_signer_and_tampering_do_not_satisfy_policy() {
         let capsule = b"canonical capsule bytes";
-        let policy = TrustPolicy::from_named_pem_keys(
-            1,
-            vec![("release".to_owned(), public_pem(4))],
-        )
-        .unwrap();
+        let policy =
+            TrustPolicy::from_named_pem_keys(1, vec![("release".to_owned(), public_pem(4))])
+                .unwrap();
         let unknown = sign_capsule(capsule, &private_pem(5)).unwrap();
         assert!(policy.verify(capsule, &[unknown]).is_err());
 
@@ -314,8 +326,14 @@ mod tests {
 
     #[test]
     fn malformed_threshold_duplicates_and_names_fail_closed() {
-        assert!(TrustPolicy::from_named_pem_keys(0, vec![("release".to_owned(), public_pem(6))]).is_err());
-        assert!(TrustPolicy::from_named_pem_keys(2, vec![("release".to_owned(), public_pem(6))]).is_err());
+        assert!(
+            TrustPolicy::from_named_pem_keys(0, vec![("release".to_owned(), public_pem(6))])
+                .is_err()
+        );
+        assert!(
+            TrustPolicy::from_named_pem_keys(2, vec![("release".to_owned(), public_pem(6))])
+                .is_err()
+        );
         assert!(TrustPolicy::from_named_pem_keys(
             1,
             vec![
@@ -332,10 +350,9 @@ mod tests {
             ],
         )
         .is_err());
-        assert!(TrustPolicy::from_named_pem_keys(
-            1,
-            vec![("bad name".to_owned(), public_pem(9))],
-        )
-        .is_err());
+        assert!(
+            TrustPolicy::from_named_pem_keys(1, vec![("bad name".to_owned(), public_pem(9))],)
+                .is_err()
+        );
     }
 }
