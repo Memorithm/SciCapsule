@@ -470,7 +470,7 @@ fn hub_run(args: &[String]) -> Result<String, ProductError> {
         status: "succeeded",
         capsule_sha256: sha256_hex(&capsule_bytes),
         capsule_name: capsule.manifest().name().to_owned(),
-        entrypoint: capsule.manifest().entrypoint().to_owned(),
+        entrypoint: capsule.manifest().entrypoint().to_string(),
         matched_signers: trust.matched_signers,
         required_signatures: trust.required_signatures,
     };
