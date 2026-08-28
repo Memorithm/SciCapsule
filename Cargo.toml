@@ -11,6 +11,8 @@ repository = "https://github.com/Memorithm/SciCapsule"
 scirust-capsule = { git = "https://github.com/Memorithm/scirust", rev = "7330f99d9a56932a4b99bb4a5f52bb8c07375332", package = "scirust-capsule" }
 scirust-capsule-schema = { git = "https://github.com/Memorithm/scirust", rev = "7330f99d9a56932a4b99bb4a5f52bb8c07375332", package = "scirust-capsule-schema" }
 serde_json = "1"
+rustix = { version = "1", features = ["fs"] }
+tempfile = "3.20"
 
 [lib]
 path = "src/lib.rs"
