@@ -27,6 +27,8 @@ jobs:
         run: cargo fmt --all -- --check
       - name: Check stable
         run: cargo check --all-targets
+      - name: Show resolved lockfile
+        run: cat Cargo.lock
       - name: Clippy stable
         run: cargo clippy --all-targets -- -D warnings
       - name: Tests stable
