@@ -134,8 +134,7 @@ fn parse(args: &[String]) -> Result<RunCommand, ProductError> {
                 max_bytes_seen = true;
             }
             "--timeout-seconds" => {
-                let raw =
-                    take_unique_value(rest, &mut index, "--timeout-seconds", timeout_seen)?;
+                let raw = take_unique_value(rest, &mut index, "--timeout-seconds", timeout_seen)?;
                 timeout_seconds = raw.parse().map_err(|_| {
                     ProductError::usage("--timeout-seconds requires a positive integer")
                 })?;
@@ -187,9 +186,9 @@ fn parse(args: &[String]) -> Result<RunCommand, ProductError> {
 }
 
 fn parse_environment(raw: &str) -> Result<(String, String), ProductError> {
-    let (name, value) = raw.split_once('=').ok_or_else(|| {
-        ProductError::usage(format!("--env expects NAME=VALUE, got {raw:?}"))
-    })?;
+    let (name, value) = raw
+        .split_once('=')
+        .ok_or_else(|| ProductError::usage(format!("--env expects NAME=VALUE, got {raw:?}")))?;
     if name.is_empty() || name.contains('\0') || value.contains('\0') {
         return Err(ProductError::usage(format!(
             "invalid --env NAME=VALUE entry {raw:?}"
@@ -270,11 +269,8 @@ fn execute(command: RunCommand) -> Result<String, ProductError> {
         .max_total_bytes
         .checked_add(MAX_CAPSULE_METADATA_BYTES)
         .ok_or_else(|| ProductError::usage("--max-bytes is too large"))?;
-    let capsule_bytes = read_regular_file_bounded(
-        &command.capsule,
-        maximum_encoded_bytes,
-        "capsule input",
-    )?;
+    let capsule_bytes =
+        read_regular_file_bounded(&command.capsule, maximum_encoded_bytes, "capsule input")?;
     let capsule = Capsule::decode(&capsule_bytes).map_err(|error| {
         ProductError::operation(format!(
             "invalid capsule {}: {error}",
@@ -288,11 +284,8 @@ fn execute(command: RunCommand) -> Result<String, ProductError> {
         .map_err(|error| ProductError::operation(format!("invalid trust policy: {error}")))?;
     let mut signatures = Vec::with_capacity(command.signatures.len());
     for path in &command.signatures {
-        let bytes = read_regular_file_bounded(
-            path,
-            MAX_SIGNATURE_ENVELOPE_BYTES,
-            "signature envelope",
-        )?;
+        let bytes =
+            read_regular_file_bounded(path, MAX_SIGNATURE_ENVELOPE_BYTES, "signature envelope")?;
         signatures.push(SignatureEnvelope::from_json(&bytes).map_err(|error| {
             ProductError::operation(format!(
                 "invalid signature envelope {}: {error}",
@@ -327,12 +320,14 @@ fn execute(command: RunCommand) -> Result<String, ProductError> {
             summary.entrypoint.display()
         )));
     }
-    fs::set_permissions(&summary.entrypoint, fs::Permissions::from_mode(0o500)).map_err(|error| {
-        ProductError::operation(format!(
-            "cannot make materialized entrypoint executable {}: {error}",
-            summary.entrypoint.display()
-        ))
-    })?;
+    fs::set_permissions(&summary.entrypoint, fs::Permissions::from_mode(0o500)).map_err(
+        |error| {
+            ProductError::operation(format!(
+                "cannot make materialized entrypoint executable {}: {error}",
+                summary.entrypoint.display()
+            ))
+        },
+    )?;
 
     let mut process = Command::new(&summary.entrypoint);
     process
@@ -410,13 +405,7 @@ mod tests {
         assert!(missing.usage);
         assert!(missing.to_string().contains("--signature"));
 
-        let policy = parse(&args(&[
-            "run",
-            "demo.scicap",
-            "--signature",
-            "demo.sig",
-        ]))
-        .unwrap_err();
+        let policy = parse(&args(&["run", "demo.scicap", "--signature", "demo.sig"])).unwrap_err();
         assert!(policy.to_string().contains("--policy"));
     }
 
@@ -437,7 +426,10 @@ mod tests {
         ]))
         .unwrap();
         assert_eq!(parsed.arguments, vec!["--not-a-runner-option", "value"]);
-        assert_eq!(parsed.environment, vec![("LANG".to_owned(), "C".to_owned())]);
+        assert_eq!(
+            parsed.environment,
+            vec![("LANG".to_owned(), "C".to_owned())]
+        );
     }
 
     #[test]
@@ -514,11 +506,8 @@ mod tests {
         let capsule_bytes = fs::read(&capsule).unwrap();
         let envelope = crate::signature::sign_capsule(&capsule_bytes, &private_pem).unwrap();
         fs::write(&signature, envelope.to_json().unwrap()).unwrap();
-        let trust = TrustPolicy::from_named_pem_keys(
-            1,
-            vec![("release".to_owned(), public_pem)],
-        )
-        .unwrap();
+        let trust =
+            TrustPolicy::from_named_pem_keys(1, vec![("release".to_owned(), public_pem)]).unwrap();
         fs::write(&policy, trust.to_json().unwrap()).unwrap();
         (dir, capsule, signature, policy)
     }
@@ -553,10 +542,8 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn untrusted_signature_fails_before_entrypoint_execution() {
-        let (dir, capsule, _trusted_signature, policy) = trusted_fixture(
-            b"#!/bin/sh\nprintf ran > \"$MARKER\"\n",
-            82,
-        );
+        let (dir, capsule, _trusted_signature, policy) =
+            trusted_fixture(b"#!/bin/sh\nprintf ran > \"$MARKER\"\n", 82);
         let marker = dir.path().join("marker");
         let other = trusted_fixture(b"#!/bin/sh\nexit 0\n", 83);
         let untrusted_signature = other.2;
@@ -578,8 +565,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn timeout_terminates_entrypoint_process_group() {
-        let (_dir, capsule, signature, policy) =
-            trusted_fixture(b"#!/bin/sh\n/bin/sleep 5\n", 84);
+        let (_dir, capsule, signature, policy) = trusted_fixture(b"#!/bin/sh\n/bin/sleep 5\n", 84);
         let error = run(&[
             "run".to_owned(),
             capsule.display().to_string(),
