@@ -34,6 +34,25 @@ fail instead of being overwritten.
 The extraction CLI also opens the capsule input on Unix with no-follow and
 nonblocking flags, requires a regular file, and bounds the read before decode.
 
+## Read-only capsule input guarantees
+
+The product's read-only capsule consumers use one default input allowance:
+1 GiB of payload bytes plus 16 MiB of capsule metadata. `inspect`, `verify`,
+`sign`, `verify-signature`, `verify-trusted`, `attest-provenance`, and
+`verify-provenance` all apply a regular-file bounded read before canonical
+decode.
+
+On Unix, these product paths open capsule inputs with `NOFOLLOW` and
+`NONBLOCK`, require the resulting descriptor to describe a regular file, and
+reject an input whose metadata size exceeds the bound before allocating or
+reading its contents. `Capsule::decode` remains the authority for canonical
+encoding, lengths and embedded payload integrity after this resource gate.
+
+The configurable `extract`, `run`, and Hub execution paths derive their capsule
+read allowance from the caller-selected payload-byte bound plus the same 16 MiB
+metadata allowance. This keeps resource gating separate from the canonical
+`.scicap` format definition.
+
 ## Detached signature guarantees
 
 SciCapsule signature envelope v1 is a product-layer sidecar and never changes
@@ -85,6 +104,23 @@ most 64 signature envelopes. Capsule, policy and signature inputs are
 size-bounded; on Unix they are opened with no-follow semantics. The exact policy
 wire format and evaluation rules are documented in
 [`TRUST_POLICY.md`](TRUST_POLICY.md).
+
+## Provenance guarantees
+
+`attest-provenance` and `verify-provenance` consume the capsule through the same
+default bounded regular-file/no-follow path as the other read-only product
+commands. The provenance subject digest is therefore computed from the exact
+capsule bytes that passed the input gate and canonical decode.
+
+Provenance is kept outside `.scicap` as a DSSE-wrapped in-toto Statement with a
+SLSA Provenance predicate. Provenance key, policy and envelope sidecars are
+bounded and use the product's no-follow reader on Unix. Provenance output uses
+create-new semantics rather than overwriting an existing file.
+
+Successful provenance verification establishes only the assertions described
+by the verified statement relative to the configured local trust policy and the
+exact capsule digest. It does not grant execution authorization. The detailed
+provenance contract is documented in [`PROVENANCE.md`](PROVENANCE.md).
 
 ## Execution v1 guarantees
 
