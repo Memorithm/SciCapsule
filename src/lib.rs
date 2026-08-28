@@ -19,6 +19,11 @@ pub const PRODUCT_NAME: &str = "SciCapsule";
 /// Canonical extension reserved for SciCapsule artifacts.
 pub const FORMAT_EXTENSION: &str = "scicap";
 
+/// Default upper bound for read-only capsule inputs: the default 1 GiB payload
+/// allowance plus the 16 MiB canonical metadata allowance.
+pub const DEFAULT_CAPSULE_READ_LIMIT: u64 =
+    DEFAULT_EXTRACTION_LIMITS.max_total_bytes + MAX_CAPSULE_METADATA_BYTES;
+
 /// Product version compiled into the binary.
 pub const fn version() -> &'static str {
     env!("CARGO_PKG_VERSION")
@@ -354,7 +359,7 @@ fn pack_command(
 }
 
 fn inspect_command(path: &Path) -> Result<String, CliError> {
-    let encoded = read_file(path)?;
+    let encoded = read_regular_file_bounded(path, DEFAULT_CAPSULE_READ_LIMIT)?;
     let capsule = Capsule::decode(&encoded).map_err(|error| {
         CliError::operation(format!("invalid capsule {}: {error}", path.display()))
     })?;
@@ -365,7 +370,7 @@ fn inspect_command(path: &Path) -> Result<String, CliError> {
 }
 
 fn verify_command(path: &Path) -> Result<String, CliError> {
-    let encoded = read_file(path)?;
+    let encoded = read_regular_file_bounded(path, DEFAULT_CAPSULE_READ_LIMIT)?;
     let capsule = Capsule::decode(&encoded).map_err(|error| {
         CliError::operation(format!("invalid capsule {}: {error}", path.display()))
     })?;
@@ -632,6 +637,51 @@ mod tests {
         let error = run(&["verify".to_owned(), capsule.display().to_string()]).unwrap_err();
         assert!(!error.is_usage());
         assert!(error.to_string().contains("SHA-256 mismatch"));
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn inspect_and_verify_reject_oversized_capsule_before_decode() {
+        let dir = test_dir("readonly-oversized");
+        let oversized = dir.join("oversized.scicap");
+        let file = File::create(&oversized).unwrap();
+        file.set_len(DEFAULT_CAPSULE_READ_LIMIT + 1).unwrap();
+
+        for command in ["inspect", "verify"] {
+            let error = run(&[command.to_owned(), oversized.display().to_string()]).unwrap_err();
+            assert!(error.to_string().contains("read limit"));
+        }
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn inspect_and_verify_reject_symlink_capsule_input() {
+        use std::os::unix::fs::symlink;
+
+        let dir = test_dir("readonly-symlink");
+        let runner = dir.join("run.bin");
+        let capsule = dir.join("demo.scicap");
+        let linked_capsule = dir.join("linked.scicap");
+        fs::write(&runner, b"runner").unwrap();
+        let spec = format!("bin/run={}", runner.display());
+        run(&[
+            "pack".to_owned(),
+            "--name".to_owned(),
+            "demo".to_owned(),
+            "--entrypoint".to_owned(),
+            "bin/run".to_owned(),
+            "--output".to_owned(),
+            capsule.display().to_string(),
+            spec,
+        ])
+        .unwrap();
+        symlink(&capsule, &linked_capsule).unwrap();
+
+        for command in ["inspect", "verify"] {
+            let error = run(&[command.to_owned(), linked_capsule.display().to_string()]).unwrap_err();
+            assert!(error.to_string().contains("safely open regular capsule input"));
+        }
         fs::remove_dir_all(dir).unwrap();
     }
 
