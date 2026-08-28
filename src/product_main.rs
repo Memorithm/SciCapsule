@@ -280,14 +280,12 @@ fn parse_create_trust_policy(args: &[String]) -> Result<ProductCommand, ProductE
                 )?));
             }
             "--require" => {
-                let raw = take_unique_value(
-                    args,
-                    &mut index,
-                    "--require",
-                    minimum_signatures.is_some(),
-                )?;
+                let raw =
+                    take_unique_value(args, &mut index, "--require", minimum_signatures.is_some())?;
                 let value = raw.parse::<u32>().map_err(|_| {
-                    ProductError::usage(format!("--require expects a positive integer, got {raw:?}"))
+                    ProductError::usage(format!(
+                        "--require expects a positive integer, got {raw:?}"
+                    ))
                 })?;
                 if value == 0 {
                     return Err(ProductError::usage("--require must be at least 1"));
@@ -514,7 +512,8 @@ fn verify_trusted_command(
         ))
     })?;
 
-    let policy_bytes = read_regular_file_bounded(policy_path, MAX_TRUST_POLICY_BYTES, "trust policy")?;
+    let policy_bytes =
+        read_regular_file_bounded(policy_path, MAX_TRUST_POLICY_BYTES, "trust policy")?;
     let policy = TrustPolicy::from_json(&policy_bytes)
         .map_err(|error| ProductError::operation(format!("invalid trust policy: {error}")))?;
 
@@ -905,7 +904,8 @@ mod tests {
         .unwrap_err();
         assert!(unknown_error.to_string().contains("threshold not met"));
 
-        let mut value: serde_json::Value = serde_json::from_slice(&fs::read(&policy).unwrap()).unwrap();
+        let mut value: serde_json::Value =
+            serde_json::from_slice(&fs::read(&policy).unwrap()).unwrap();
         value["version"] = serde_json::Value::from(999_u64);
         fs::write(&policy, serde_json::to_vec(&value).unwrap()).unwrap();
         let malformed_error = run_product(&[
@@ -917,7 +917,9 @@ mod tests {
             sig_unknown.display().to_string(),
         ])
         .unwrap_err();
-        assert!(malformed_error.to_string().contains("unsupported trust policy version"));
+        assert!(malformed_error
+            .to_string()
+            .contains("unsupported trust policy version"));
         fs::remove_dir_all(dir).unwrap();
     }
 
@@ -1003,8 +1005,11 @@ mod tests {
         let policy = dir.join("policy.json");
         symlink(&public, &linked_public).unwrap();
 
-        let key_error = create_policy(&policy, 1, &[("release", linked_public.as_path())]).unwrap_err();
-        assert!(key_error.to_string().contains("safely open trusted public key"));
+        let key_error =
+            create_policy(&policy, 1, &[("release", linked_public.as_path())]).unwrap_err();
+        assert!(key_error
+            .to_string()
+            .contains("safely open trusted public key"));
         assert!(!policy.exists());
 
         create_policy(&policy, 1, &[("release", public.as_path())]).unwrap();
@@ -1021,7 +1026,9 @@ mod tests {
             signature.display().to_string(),
         ])
         .unwrap_err();
-        assert!(policy_error.to_string().contains("safely open trust policy"));
+        assert!(policy_error
+            .to_string()
+            .contains("safely open trust policy"));
         fs::remove_dir_all(dir).unwrap();
     }
 }
