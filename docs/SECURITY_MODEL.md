@@ -34,9 +34,36 @@ fail instead of being overwritten.
 The extraction CLI also opens the capsule input on Unix with no-follow and
 nonblocking flags, requires a regular file, and bounds the read before decode.
 
+## Detached signature guarantees
+
+SciCapsule signature envelope v1 is a product-layer sidecar and never changes
+the canonical `.scicap` bytes. It uses Ed25519 through `ed25519-dalek` and
+strict signature verification. Private keys are accepted as PKCS#8 PEM and
+public keys as SPKI PEM.
+
+The signed message contains a SciCapsule v1 domain-separation prefix followed
+by the exact canonical capsule bytes. `sign` first requires the capsule to pass
+canonical decode. `verify-signature` likewise validates the capsule before
+accepting a signature.
+
+The v1 envelope carries only its version, algorithm identifier, and 64-byte
+signature. It deliberately carries no trusted public key. The caller must
+provide a public key separately, so signer-controlled metadata cannot become a
+trust anchor merely by being present in the sidecar.
+
+Signature and key sidecars are size-bounded. On Unix they are opened with
+no-follow semantics. Signature output uses create-new semantics and is not
+silently overwritten. The exact wire contract and non-goals are documented in
+[`SIGNATURES.md`](SIGNATURES.md).
+
 ## Explicit non-guarantees
 
 - Integrity verification is not signature verification or trust evaluation.
+- A cryptographically valid signature does not establish that its public key is
+  trusted, belongs to a claimed identity, is unrevoked, or is authorized to
+  execute code.
+- Detached signature v1 does not provide timestamps, revocation, transparency,
+  certificate chains, threshold authorization, or network key discovery.
 - Extraction is not process execution.
 - Future `run` support is not a hostile-code sandbox unless it applies real OS
   isolation and reports that isolation explicitly.

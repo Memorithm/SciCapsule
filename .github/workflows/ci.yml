@@ -26,13 +26,13 @@ jobs:
       - name: Format
         run: cargo fmt --all -- --check
       - name: Check stable
-        run: cargo check --all-targets
+        run: cargo check --locked --all-targets
       - name: Clippy stable
-        run: cargo clippy --all-targets -- -D warnings
+        run: cargo clippy --locked --all-targets -- -D warnings
       - name: Tests stable
-        run: cargo test --all-targets
+        run: cargo test --locked --all-targets
       - uses: dtolnay/rust-toolchain@fa04a1451ff1842e2626ccb99004d0195b455a88
         with:
           toolchain: 1.89.0
       - name: Check MSRV 1.89
-        run: cargo +1.89.0 check --all-targets
+        run: cargo +1.89.0 check --locked --all-targets
