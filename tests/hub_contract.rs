@@ -217,7 +217,10 @@ fn preexisting_hub_result_blocks_payload_before_side_effects() {
     let output = hub_run(&capsule, &policy_path, &request_path, &result_path);
     assert!(!output.status.success());
     assert!(String::from_utf8_lossy(&output.stderr).contains("already exists"));
-    assert!(!marker.exists(), "payload executed despite occupied result path");
+    assert!(
+        !marker.exists(),
+        "payload executed despite occupied result path"
+    );
     assert_eq!(
         fs::read(&result_path).expect("read occupied result"),
         b"occupied"
