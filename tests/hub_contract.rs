@@ -192,3 +192,34 @@ fn untrusted_hub_request_fails_before_payload_and_does_not_create_result() {
     assert!(!marker.exists(), "untrusted payload executed");
     assert!(!result_path.exists(), "failure fabricated a success result");
 }
+
+#[test]
+fn preexisting_hub_result_blocks_payload_before_side_effects() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let marker = dir.path().join("marker");
+    let capsule = pack_capsule(dir.path(), b"#!/bin/sh\nprintf ran > \"$MARKER\"\n");
+    let (private, public) = write_keypair(dir.path(), 104, "release");
+    let signature = dir.path().join("release.sig");
+    let policy_path = dir.path().join("policy.json");
+    let request_path = dir.path().join("request.json");
+    let result_path = dir.path().join("result.json");
+
+    sign(&capsule, &private, &signature);
+    policy(&public, &policy_path);
+    request(
+        &signature,
+        &request_path,
+        &[format!("MARKER={}", marker.display())],
+        &[],
+    );
+    fs::write(&result_path, b"occupied").expect("occupy result path");
+
+    let output = hub_run(&capsule, &policy_path, &request_path, &result_path);
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("already exists"));
+    assert!(!marker.exists(), "payload executed despite occupied result path");
+    assert_eq!(
+        fs::read(&result_path).expect("read occupied result"),
+        b"occupied"
+    );
+}
