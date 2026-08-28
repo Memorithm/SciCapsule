@@ -1,5 +1,5 @@
 use crate::execution_cli::{
-    DEFAULT_TIMEOUT_SECONDS, MAX_ARGUMENT_BYTES, MAX_ARGUMENTS, MAX_ENVIRONMENT_BYTES,
+    DEFAULT_TIMEOUT_SECONDS, MAX_ARGUMENTS, MAX_ARGUMENT_BYTES, MAX_ENVIRONMENT_BYTES,
     MAX_ENVIRONMENT_ENTRIES, MAX_TIMEOUT_SECONDS,
 };
 use crate::signature::{SignatureEnvelope, SIGNATURE_ALGORITHM, SIGNATURE_ENVELOPE_VERSION};
@@ -139,7 +139,9 @@ impl HubRunResult {
         })?;
         encoded.push(b'\n');
         if encoded.len() > MAX_HUB_RESULT_BYTES {
-            return Err(ProductError::operation("Hub execution result exceeded size limit"));
+            return Err(ProductError::operation(
+                "Hub execution result exceeded size limit",
+            ));
         }
         Ok(encoded)
     }
@@ -194,16 +196,6 @@ pub(crate) fn handles(args: &[String]) -> bool {
         args.first().map(String::as_str),
         Some("create-hub-request" | "hub-run" | "hub-manifest")
     )
-}
-
-pub(crate) fn help_text() -> &'static str {
-    "\nSCIRUST HUB COMMANDS:\n\
-    scicapsule create-hub-request --output REQUEST.json --signature FILE.sig [--signature FILE.sig ...] [run options] [-- ARG ...]\n\
-    scicapsule hub-run --capsule FILE --policy POLICY.json --request REQUEST.json --result RESULT.json\n\
-    scicapsule hub-manifest --component-id UUID --program /absolute/path/to/scicapsule --output COMPONENT.json\n\n\
-    create-hub-request  Build a canonical, versioned Hub execution request artifact\n\
-    hub-run             Execute a Hub request through the same trusted `run` security gate\n\
-    hub-manifest        Emit a deterministic SciRust Hub component manifest v1\n"
 }
 
 pub(crate) fn run(args: &[String]) -> Result<String, ProductError> {
@@ -335,7 +327,10 @@ fn create_request(args: &[String]) -> Result<String, ProductError> {
     };
     let encoded = request.to_json()?;
     write_new_file(&output, &encoded, "Hub execution request")?;
-    Ok(format!("created Hub execution request {}\n", output.display()))
+    Ok(format!(
+        "created Hub execution request {}\n",
+        output.display()
+    ))
 }
 
 fn hub_run(args: &[String]) -> Result<String, ProductError> {
@@ -387,13 +382,20 @@ fn hub_run(args: &[String]) -> Result<String, ProductError> {
         index += 1;
     }
 
-    let capsule_path = capsule.ok_or_else(|| ProductError::usage("hub-run requires --capsule FILE"))?;
-    let policy_path = policy.ok_or_else(|| ProductError::usage("hub-run requires --policy FILE"))?;
-    let request_path = request.ok_or_else(|| ProductError::usage("hub-run requires --request FILE"))?;
-    let result_path = result.ok_or_else(|| ProductError::usage("hub-run requires --result FILE"))?;
+    let capsule_path =
+        capsule.ok_or_else(|| ProductError::usage("hub-run requires --capsule FILE"))?;
+    let policy_path =
+        policy.ok_or_else(|| ProductError::usage("hub-run requires --policy FILE"))?;
+    let request_path =
+        request.ok_or_else(|| ProductError::usage("hub-run requires --request FILE"))?;
+    let result_path =
+        result.ok_or_else(|| ProductError::usage("hub-run requires --result FILE"))?;
 
-    let request_bytes =
-        read_regular_file_bounded(&request_path, MAX_HUB_REQUEST_BYTES, "Hub execution request")?;
+    let request_bytes = read_regular_file_bounded(
+        &request_path,
+        MAX_HUB_REQUEST_BYTES,
+        "Hub execution request",
+    )?;
     let request = HubRunRequest::from_json(&request_bytes)?;
 
     let maximum_encoded_bytes = request
@@ -403,7 +405,10 @@ fn hub_run(args: &[String]) -> Result<String, ProductError> {
     let capsule_bytes =
         read_regular_file_bounded(&capsule_path, maximum_encoded_bytes, "capsule input")?;
     let capsule = Capsule::decode(&capsule_bytes).map_err(|error| {
-        ProductError::operation(format!("invalid capsule {}: {error}", capsule_path.display()))
+        ProductError::operation(format!(
+            "invalid capsule {}: {error}",
+            capsule_path.display()
+        ))
     })?;
     let policy_bytes =
         read_regular_file_bounded(&policy_path, MAX_TRUST_POLICY_BYTES, "trust policy")?;
@@ -417,7 +422,9 @@ fn hub_run(args: &[String]) -> Result<String, ProductError> {
         .prefix("scicapsule-hub-signatures-")
         .tempdir()
         .map_err(|error| {
-            ProductError::operation(format!("cannot create private Hub signature directory: {error}"))
+            ProductError::operation(format!(
+                "cannot create private Hub signature directory: {error}"
+            ))
         })?;
     let mut run_args = vec![
         "run".to_owned(),
@@ -427,9 +434,12 @@ fn hub_run(args: &[String]) -> Result<String, ProductError> {
     ];
     for (index, signature) in request.signatures.iter().enumerate() {
         let path = signature_dir.path().join(format!("signature-{index}.json"));
-        fs::write(&path, signature.to_json().map_err(|error| {
-            ProductError::operation(format!("cannot encode Hub request signature: {error}"))
-        })?)
+        fs::write(
+            &path,
+            signature.to_json().map_err(|error| {
+                ProductError::operation(format!("cannot encode Hub request signature: {error}"))
+            })?,
+        )
         .map_err(|error| {
             ProductError::operation(format!("cannot materialize Hub request signature: {error}"))
         })?;
@@ -465,7 +475,10 @@ fn hub_run(args: &[String]) -> Result<String, ProductError> {
         required_signatures: trust.required_signatures,
     };
     write_new_file(&result_path, &result.to_json()?, "Hub execution result")?;
-    Ok(format!("wrote Hub execution result {}\n", result_path.display()))
+    Ok(format!(
+        "wrote Hub execution result {}\n",
+        result_path.display()
+    ))
 }
 
 fn create_manifest(args: &[String]) -> Result<String, ProductError> {
@@ -509,7 +522,8 @@ fn create_manifest(args: &[String]) -> Result<String, ProductError> {
     }
 
     let component_id = canonical_uuid(
-        &component_id.ok_or_else(|| ProductError::usage("hub-manifest requires --component-id UUID"))?,
+        &component_id
+            .ok_or_else(|| ProductError::usage("hub-manifest requires --component-id UUID"))?,
     )?;
     let program = program.ok_or_else(|| {
         ProductError::usage("hub-manifest requires --program /absolute/path/to/scicapsule")
@@ -529,7 +543,10 @@ fn create_manifest(args: &[String]) -> Result<String, ProductError> {
 
     let mut properties = BTreeMap::new();
     properties.insert("authorization".to_owned(), "local_trust_policy".to_owned());
-    properties.insert("request_media_type".to_owned(), REQUEST_MEDIA_TYPE.to_owned());
+    properties.insert(
+        "request_media_type".to_owned(),
+        REQUEST_MEDIA_TYPE.to_owned(),
+    );
     properties.insert("result_media_type".to_owned(), RESULT_MEDIA_TYPE.to_owned());
     properties.insert("sandbox".to_owned(), "none".to_owned());
 
@@ -590,11 +607,16 @@ fn create_manifest(args: &[String]) -> Result<String, ProductError> {
         metadata,
     };
     let mut encoded = serde_json::to_vec_pretty(&manifest).map_err(|error| {
-        ProductError::operation(format!("cannot encode SciRust Hub component manifest: {error}"))
+        ProductError::operation(format!(
+            "cannot encode SciRust Hub component manifest: {error}"
+        ))
     })?;
     encoded.push(b'\n');
     write_new_file(&output, &encoded, "SciRust Hub component manifest")?;
-    Ok(format!("created SciRust Hub component manifest {}\n", output.display()))
+    Ok(format!(
+        "created SciRust Hub component manifest {}\n",
+        output.display()
+    ))
 }
 
 fn validate_environment(environment: &[HubEnvironmentEntry]) -> Result<(), ProductError> {
