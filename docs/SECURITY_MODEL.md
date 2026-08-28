@@ -121,6 +121,35 @@ private temporary materialization is removed when the run scope ends.
 The complete execution contract and its limits are documented in
 [`EXECUTION.md`](EXECUTION.md).
 
+## SciRust Hub adapter guarantees
+
+The Hub adapter remains a product layer above the same canonical container and
+execution implementation. `hub-run` first rejects a result destination that
+already exists, then bounded-reads and validates the request, capsule and local
+trust policy. The trust decision is made against the exact capsule bytes held in
+memory.
+
+After that decision and before delegating to `run`, `hub-run` creates a private
+temporary input-snapshot directory. It writes the exact verified capsule bytes,
+the exact trust-policy bytes and the already validated detached signature
+envelopes into new files there. The Phase 5 runner receives only those private
+snapshot paths. It therefore does not reopen the caller-controlled capsule or
+policy path after the Hub-facing trust decision.
+
+The machine-readable Hub result is derived from the same in-memory capsule and
+trust decision used to construct those snapshots. Its capsule digest, manifest
+name/entrypoint and matched signers therefore describe the bytes that were
+supplied to the delegated execution path rather than a later path lookup.
+
+Result publication still uses create-new semantics. The early result-path check
+prevents an already occupied destination from causing payload side effects, and
+the final create-new write prevents overwrite if a racing creator appears after
+the preflight. The early check is not a transactional reservation: in that
+narrow race the payload may already have run before final publication fails.
+
+The exact adapter wire contract and its media types are documented in
+[`HUB_CONTRACT.md`](HUB_CONTRACT.md).
+
 ## Explicit non-guarantees
 
 - Integrity verification is not signature verification or trust evaluation.
@@ -132,11 +161,11 @@ The complete execution contract and its limits are documented in
   expiration, timestamps, certificate chains, transparency, or provenance.
 - A valid SLSA/in-toto provenance statement is evidence about asserted build
   provenance; it is not by itself execution authorization.
-- `run` is **not an OS sandbox**. It does not restrict payload filesystem
-  access outside the temporary tree, network access, syscalls, child-process
-  creation, credentials, user/group privileges, CPU consumption, memory
-  consumption, or other host resources beyond its stated file/byte/input and
-  wall-clock bounds.
+- `run` and `hub-run` are **not OS sandboxes**. They do not restrict payload
+  filesystem access outside the temporary tree, network access, syscalls,
+  child-process creation, credentials, user/group privileges, CPU consumption,
+  memory consumption, or other host resources beyond their stated
+  file/byte/input and wall-clock bounds.
 - A trust-policy decision means only that the configured signature threshold
   authenticated the exact capsule bytes. It is not a claim that the payload is
   benign.
