@@ -67,8 +67,7 @@ pub(crate) fn run(args: &[String]) -> Result<String, ProductError> {
 
     #[cfg(unix)]
     {
-        let command = parse(args)?;
-        execute(command)
+        execute(parse(args)?)
     }
 }
 
@@ -78,11 +77,6 @@ fn parse(args: &[String]) -> Result<RunCommand, ProductError> {
     };
     if command != "run" {
         return Err(ProductError::usage("unknown execution command"));
-    }
-    if matches!(rest, [argument] if argument == "-h" || argument == "--help") {
-        return Err(ProductError::usage(
-            "run help is available through `scicapsule --help`",
-        ));
     }
 
     let mut capsule = None;
@@ -196,11 +190,7 @@ fn parse_environment(raw: &str) -> Result<(String, String), ProductError> {
     let (name, value) = raw.split_once('=').ok_or_else(|| {
         ProductError::usage(format!("--env expects NAME=VALUE, got {raw:?}"))
     })?;
-    if name.is_empty()
-        || name.contains('=')
-        || name.contains('\0')
-        || value.contains('\0')
-    {
+    if name.is_empty() || name.contains('\0') || value.contains('\0') {
         return Err(ProductError::usage(format!(
             "invalid --env NAME=VALUE entry {raw:?}"
         )));
@@ -254,6 +244,23 @@ fn validate_argument_limits(arguments: &[String]) -> Result<(), ProductError> {
 }
 
 #[cfg(unix)]
+struct ProcessGroupGuard(rustix::process::Pid);
+
+#[cfg(unix)]
+impl ProcessGroupGuard {
+    fn kill(&self) {
+        let _ = rustix::process::kill_process_group(self.0, rustix::process::Signal::KILL);
+    }
+}
+
+#[cfg(unix)]
+impl Drop for ProcessGroupGuard {
+    fn drop(&mut self) {
+        self.kill();
+    }
+}
+
+#[cfg(unix)]
 fn execute(command: RunCommand) -> Result<String, ProductError> {
     use std::os::unix::fs::PermissionsExt;
     use std::os::unix::process::CommandExt;
@@ -300,7 +307,9 @@ fn execute(command: RunCommand) -> Result<String, ProductError> {
     let materialization_parent = tempfile::Builder::new()
         .prefix("scicapsule-run-")
         .tempdir()
-        .map_err(|error| ProductError::operation(format!("cannot create private run directory: {error}")))?;
+        .map_err(|error| {
+            ProductError::operation(format!("cannot create private run directory: {error}"))
+        })?;
     let materialized = materialization_parent.path().join("root");
     let summary = extract_capsule(&capsule, &materialized, command.limits).map_err(|error| {
         ProductError::operation(format!("cannot materialize capsule for execution: {error}"))
@@ -344,34 +353,32 @@ fn execute(command: RunCommand) -> Result<String, ProductError> {
             capsule.manifest().entrypoint()
         ))
     })?;
-    let process_group = rustix::process::Pid::from_child(&child);
+    let process_group = ProcessGroupGuard(rustix::process::Pid::from_child(&child));
     let deadline = Instant::now()
         .checked_add(Duration::from_secs(command.timeout_seconds))
         .ok_or_else(|| ProductError::operation("execution deadline overflow"))?;
 
     let status = loop {
-        match child.try_wait().map_err(|error| {
-            ProductError::operation(format!("cannot wait for capsule entrypoint: {error}"))
-        })? {
-            Some(status) => break status,
-            None if Instant::now() >= deadline => {
-                let _ = rustix::process::kill_process_group(
-                    process_group,
-                    rustix::process::Signal::KILL,
-                );
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) if Instant::now() >= deadline => {
+                process_group.kill();
                 let _ = child.wait();
                 return Err(ProductError::operation(format!(
                     "capsule execution timed out after {} second(s)",
                     command.timeout_seconds
                 )));
             }
-            None => thread::sleep(Duration::from_millis(10)),
+            Ok(None) => thread::sleep(Duration::from_millis(10)),
+            Err(error) => {
+                process_group.kill();
+                let _ = child.wait();
+                return Err(ProductError::operation(format!(
+                    "cannot wait for capsule entrypoint: {error}"
+                )));
+            }
         }
     };
-
-    // The entrypoint may have spawned descendants. This runner does not permit
-    // them to outlive the command, even when the process-group leader exited.
-    let _ = rustix::process::kill_process_group(process_group, rustix::process::Signal::KILL);
 
     if !status.success() {
         return Err(ProductError::operation(format!(
@@ -462,5 +469,128 @@ mod tests {
         ]))
         .unwrap_err();
         assert!(timeout.to_string().contains("between 1 and"));
+    }
+
+    #[cfg(unix)]
+    fn trusted_fixture(script: &[u8], seed: u8) -> (tempfile::TempDir, PathBuf, PathBuf, PathBuf) {
+        use ed25519_dalek::{
+            pkcs8::{EncodePrivateKey, EncodePublicKey},
+            SigningKey,
+        };
+        use pkcs8::LineEnding;
+
+        let base = Path::new(env!("CARGO_MANIFEST_DIR")).join("target/test-tmp");
+        fs::create_dir_all(&base).unwrap();
+        let dir = tempfile::Builder::new()
+            .prefix("execution-")
+            .tempdir_in(base)
+            .unwrap();
+        let source = dir.path().join("run.sh");
+        let capsule = dir.path().join("demo.scicap");
+        let signature = dir.path().join("demo.sig");
+        let policy = dir.path().join("policy.json");
+        fs::write(&source, script).unwrap();
+        scicapsule::run(&[
+            "pack".to_owned(),
+            "--name".to_owned(),
+            "demo".to_owned(),
+            "--entrypoint".to_owned(),
+            "bin/run".to_owned(),
+            "--output".to_owned(),
+            capsule.display().to_string(),
+            format!("bin/run={}", source.display()),
+        ])
+        .unwrap();
+
+        let signing_key = SigningKey::from_bytes(&[seed; ed25519_dalek::SECRET_KEY_LENGTH]);
+        let private_pem = signing_key
+            .to_pkcs8_pem(LineEnding::LF)
+            .unwrap()
+            .to_string();
+        let public_pem = signing_key
+            .verifying_key()
+            .to_public_key_pem(LineEnding::LF)
+            .unwrap();
+        let capsule_bytes = fs::read(&capsule).unwrap();
+        let envelope = crate::signature::sign_capsule(&capsule_bytes, &private_pem).unwrap();
+        fs::write(&signature, envelope.to_json().unwrap()).unwrap();
+        let trust = TrustPolicy::from_named_pem_keys(
+            1,
+            vec![("release".to_owned(), public_pem)],
+        )
+        .unwrap();
+        fs::write(&policy, trust.to_json().unwrap()).unwrap();
+        (dir, capsule, signature, policy)
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn trusted_execution_runs_exact_entrypoint_with_explicit_environment_and_arguments() {
+        let (_dir, capsule, signature, policy) = trusted_fixture(
+            b"#!/bin/sh\n[ \"$SCICAPSULE_TEST\" = \"ok\" ] || exit 21\n[ \"$1\" = \"--literal\" ] || exit 22\n[ \"$2\" = '$(false)' ] || exit 23\nexit 0\n",
+            81,
+        );
+        let result = run(&[
+            "run".to_owned(),
+            capsule.display().to_string(),
+            "--policy".to_owned(),
+            policy.display().to_string(),
+            "--signature".to_owned(),
+            signature.display().to_string(),
+            "--env".to_owned(),
+            "SCICAPSULE_TEST=ok".to_owned(),
+            "--timeout-seconds".to_owned(),
+            "5".to_owned(),
+            "--".to_owned(),
+            "--literal".to_owned(),
+            "$(false)".to_owned(),
+        ])
+        .unwrap();
+        assert!(result.contains("executed"));
+        assert!(result.contains("matched [release]"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn untrusted_signature_fails_before_entrypoint_execution() {
+        let (dir, capsule, _trusted_signature, policy) = trusted_fixture(
+            b"#!/bin/sh\nprintf ran > \"$MARKER\"\n",
+            82,
+        );
+        let marker = dir.path().join("marker");
+        let other = trusted_fixture(b"#!/bin/sh\nexit 0\n", 83);
+        let untrusted_signature = other.2;
+        let error = run(&[
+            "run".to_owned(),
+            capsule.display().to_string(),
+            "--policy".to_owned(),
+            policy.display().to_string(),
+            "--signature".to_owned(),
+            untrusted_signature.display().to_string(),
+            "--env".to_owned(),
+            format!("MARKER={}", marker.display()),
+        ])
+        .unwrap_err();
+        assert!(error.to_string().contains("execution trust failed"));
+        assert!(!marker.exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn timeout_terminates_entrypoint_process_group() {
+        let (_dir, capsule, signature, policy) =
+            trusted_fixture(b"#!/bin/sh\n/bin/sleep 5\n", 84);
+        let error = run(&[
+            "run".to_owned(),
+            capsule.display().to_string(),
+            "--policy".to_owned(),
+            policy.display().to_string(),
+            "--signature".to_owned(),
+            signature.display().to_string(),
+            "--timeout-seconds".to_owned(),
+            "1".to_owned(),
+        ])
+        .unwrap_err();
+        assert!(error.to_string().contains("timed out after 1 second"));
     }
 }
