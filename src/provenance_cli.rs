@@ -4,6 +4,7 @@ use crate::{
     read_regular_file_bounded, read_regular_utf8_bounded, take_unique_value, take_value,
     write_new_file, ProductError, MAX_KEY_FILE_BYTES, MAX_TRUST_POLICY_BYTES,
 };
+use scicapsule::DEFAULT_CAPSULE_READ_LIMIT;
 use scirust_capsule::Capsule;
 use std::path::{Path, PathBuf};
 
@@ -242,7 +243,11 @@ fn attest_command(
     source_uri: &str,
     source_sha256: &str,
 ) -> Result<String, ProductError> {
-    let capsule_bytes = read_file(capsule_path)?;
+    let capsule_bytes = read_regular_file_bounded(
+        capsule_path,
+        DEFAULT_CAPSULE_READ_LIMIT,
+        "capsule input",
+    )?;
     let capsule = Capsule::decode(&capsule_bytes).map_err(|error| {
         ProductError::operation(format!(
             "invalid capsule {}: {error}",
@@ -298,7 +303,11 @@ fn verify_command(
     provenance_path: &Path,
     policy_path: &Path,
 ) -> Result<String, ProductError> {
-    let capsule_bytes = read_file(capsule_path)?;
+    let capsule_bytes = read_regular_file_bounded(
+        capsule_path,
+        DEFAULT_CAPSULE_READ_LIMIT,
+        "capsule input",
+    )?;
     let capsule = Capsule::decode(&capsule_bytes).map_err(|error| {
         ProductError::operation(format!(
             "invalid capsule {}: {error}",
@@ -333,12 +342,6 @@ fn verify_command(
         verified.trust.matched_signers.join(","),
         verified.trust.required_signatures
     ))
-}
-
-fn read_file(path: &Path) -> Result<Vec<u8>, ProductError> {
-    std::fs::read(path).map_err(|error| {
-        ProductError::operation(format!("cannot read {}: {error}", path.display()))
-    })
 }
 
 #[cfg(test)]
@@ -489,6 +492,32 @@ mod tests {
     }
 
     #[test]
+    fn provenance_capsule_input_rejects_oversized_file_before_decode() {
+        let dir = test_dir("oversized-capsule");
+        let oversized = dir.join("oversized.scicap");
+        let (private, _) = write_keys(&dir, 75);
+        let output = dir.join("oversized.intoto.json");
+        let file = fs::File::create(&oversized).unwrap();
+        file.set_len(DEFAULT_CAPSULE_READ_LIMIT + 1).unwrap();
+
+        let attest_error = run(&attest_args(&oversized, &output, &[private.as_path()])).unwrap_err();
+        assert!(attest_error.to_string().contains("read limit"));
+        assert!(!output.exists());
+
+        let verify_error = run(&[
+            "verify-provenance".to_owned(),
+            oversized.display().to_string(),
+            "--provenance".to_owned(),
+            dir.join("missing.intoto.json").display().to_string(),
+            "--policy".to_owned(),
+            dir.join("missing-policy.json").display().to_string(),
+        ])
+        .unwrap_err();
+        assert!(verify_error.to_string().contains("read limit"));
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
     fn provenance_for_different_capsule_is_rejected() {
         let dir = test_dir("wrong-capsule");
         let capsule_a = pack_capsule(&dir, "a", b"runner-a");
@@ -509,6 +538,48 @@ mod tests {
         ])
         .unwrap_err();
         assert!(error.to_string().contains("subject SHA-256"));
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn provenance_capsule_inputs_reject_symlinks() {
+        use std::os::unix::fs::symlink;
+
+        let dir = test_dir("capsule-symlink");
+        let capsule = pack_capsule(&dir, "demo", b"runner");
+        let linked_capsule = dir.join("linked.scicap");
+        let (private, public) = write_keys(&dir, 76);
+        let provenance = dir.join("demo.intoto.json");
+        let linked_output = dir.join("linked.intoto.json");
+        let policy = dir.join("policy.json");
+        write_policy(&policy, 1, &[("builder", public.as_path())]);
+        run(&attest_args(&capsule, &provenance, &[private.as_path()])).unwrap();
+        symlink(&capsule, &linked_capsule).unwrap();
+
+        let attest_error = run(&attest_args(
+            &linked_capsule,
+            &linked_output,
+            &[private.as_path()],
+        ))
+        .unwrap_err();
+        assert!(attest_error
+            .to_string()
+            .contains("safely open capsule input"));
+        assert!(!linked_output.exists());
+
+        let verify_error = run(&[
+            "verify-provenance".to_owned(),
+            linked_capsule.display().to_string(),
+            "--provenance".to_owned(),
+            provenance.display().to_string(),
+            "--policy".to_owned(),
+            policy.display().to_string(),
+        ])
+        .unwrap_err();
+        assert!(verify_error
+            .to_string()
+            .contains("safely open capsule input"));
         fs::remove_dir_all(dir).unwrap();
     }
 
