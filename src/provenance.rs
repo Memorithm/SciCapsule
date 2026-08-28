@@ -113,7 +113,9 @@ impl ProvenanceStatement {
 
     pub fn from_json(encoded: &[u8]) -> Result<Self, ProvenanceError> {
         let statement: Self = serde_json::from_slice(encoded).map_err(|error| {
-            ProvenanceError::new(format!("invalid in-toto provenance statement JSON: {error}"))
+            ProvenanceError::new(format!(
+                "invalid in-toto provenance statement JSON: {error}"
+            ))
         })?;
         statement.validate()?;
         Ok(statement)
@@ -251,8 +253,9 @@ impl DsseEnvelope {
 
     pub fn to_json(&self) -> Result<Vec<u8>, ProvenanceError> {
         self.decode_authenticated_parts()?;
-        let mut encoded = serde_json::to_vec_pretty(self)
-            .map_err(|error| ProvenanceError::new(format!("cannot serialize DSSE envelope: {error}")))?;
+        let mut encoded = serde_json::to_vec_pretty(self).map_err(|error| {
+            ProvenanceError::new(format!("cannot serialize DSSE envelope: {error}"))
+        })?;
         encoded.push(b'\n');
         Ok(encoded)
     }
@@ -355,7 +358,11 @@ fn validate_type_uri(value: &str, label: &str) -> Result<(), ProvenanceError> {
             MAX_TYPE_URI_BYTES
         )));
     }
-    if !value.is_ascii() || value.bytes().any(|byte| byte.is_ascii_whitespace() || byte.is_ascii_control()) {
+    if !value.is_ascii()
+        || value
+            .bytes()
+            .any(|byte| byte.is_ascii_whitespace() || byte.is_ascii_control())
+    {
         return Err(ProvenanceError::new(format!(
             "{label} must be an ASCII URI without whitespace or control characters"
         )));
@@ -366,8 +373,11 @@ fn validate_type_uri(value: &str, label: &str) -> Result<(), ProvenanceError> {
         )));
     };
     let mut scheme_bytes = scheme.bytes();
-    if !scheme_bytes.next().is_some_and(|byte| byte.is_ascii_alphabetic())
-        || !scheme_bytes.all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'+' | b'-' | b'.'))
+    if !scheme_bytes
+        .next()
+        .is_some_and(|byte| byte.is_ascii_alphabetic())
+        || !scheme_bytes
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'+' | b'-' | b'.'))
     {
         return Err(ProvenanceError::new(format!(
             "{label} has an invalid URI scheme"
@@ -514,28 +524,26 @@ mod tests {
         )
         .unwrap();
 
-        let duplicate = DsseEnvelope::sign_statement(
-            &payload,
-            &[private_pem(1), private_pem(1)],
-        )
-        .unwrap();
+        let duplicate =
+            DsseEnvelope::sign_statement(&payload, &[private_pem(1), private_pem(1)]).unwrap();
         assert!(duplicate.verify_for_capsule(capsule, &policy).is_err());
 
         let envelope =
             DsseEnvelope::sign_statement(&payload, &[private_pem(2), private_pem(1)]).unwrap();
         let verified = envelope.verify_for_capsule(capsule, &policy).unwrap();
-        assert_eq!(verified.trust.matched_signers, vec!["builder-a", "builder-b"]);
+        assert_eq!(
+            verified.trust.matched_signers,
+            vec!["builder-a", "builder-b"]
+        );
     }
 
     #[test]
     fn tampered_payload_and_untrusted_signer_fail() {
         let capsule = b"exact capsule bytes";
         let payload = statement(capsule).to_json().unwrap();
-        let policy = TrustPolicy::from_named_pem_keys(
-            1,
-            vec![("trusted".to_owned(), public_pem(3))],
-        )
-        .unwrap();
+        let policy =
+            TrustPolicy::from_named_pem_keys(1, vec![("trusted".to_owned(), public_pem(3))])
+                .unwrap();
 
         let untrusted = DsseEnvelope::sign_statement(&payload, &[private_pem(4)]).unwrap();
         assert!(untrusted.verify_for_capsule(capsule, &policy).is_err());
@@ -550,11 +558,9 @@ mod tests {
     #[test]
     fn authenticated_wrong_predicate_and_wrong_subject_fail_after_signature_verification() {
         let capsule = b"exact capsule bytes";
-        let policy = TrustPolicy::from_named_pem_keys(
-            1,
-            vec![("builder".to_owned(), public_pem(5))],
-        )
-        .unwrap();
+        let policy =
+            TrustPolicy::from_named_pem_keys(1, vec![("builder".to_owned(), public_pem(5))])
+                .unwrap();
 
         let mut wrong_predicate: serde_json::Value =
             serde_json::from_slice(&statement(capsule).to_json().unwrap()).unwrap();
@@ -568,19 +574,20 @@ mod tests {
         assert!(envelope.verify_for_capsule(capsule, &policy).is_err());
 
         let other_payload = statement(b"other capsule").to_json().unwrap();
-        let wrong_subject = DsseEnvelope::sign_statement(&other_payload, &[private_pem(5)]).unwrap();
-        let error = wrong_subject.verify_for_capsule(capsule, &policy).unwrap_err();
+        let wrong_subject =
+            DsseEnvelope::sign_statement(&other_payload, &[private_pem(5)]).unwrap();
+        let error = wrong_subject
+            .verify_for_capsule(capsule, &policy)
+            .unwrap_err();
         assert!(error.to_string().contains("subject SHA-256"));
     }
 
     #[test]
     fn standard_extension_fields_are_ignored() {
         let capsule = b"exact capsule bytes";
-        let policy = TrustPolicy::from_named_pem_keys(
-            1,
-            vec![("builder".to_owned(), public_pem(6))],
-        )
-        .unwrap();
+        let policy =
+            TrustPolicy::from_named_pem_keys(1, vec![("builder".to_owned(), public_pem(6))])
+                .unwrap();
         let mut value: serde_json::Value =
             serde_json::from_slice(&statement(capsule).to_json().unwrap()).unwrap();
         value["https://example.com/extension"] = serde_json::json!({"value": true});
