@@ -8,11 +8,13 @@ description = "SciCapsule product CLI for portable, reproducible SciRust executi
 repository = "https://github.com/Memorithm/SciCapsule"
 
 [dependencies]
+base64ct = { version = "=1.8.3", features = ["alloc"] }
 ed25519-dalek = { version = "=2.2.0", features = ["pem", "pkcs8"] }
 scirust-capsule = { git = "https://github.com/Memorithm/scirust", rev = "7330f99d9a56932a4b99bb4a5f52bb8c07375332", package = "scirust-capsule" }
 scirust-capsule-schema = { git = "https://github.com/Memorithm/scirust", rev = "7330f99d9a56932a4b99bb4a5f52bb8c07375332", package = "scirust-capsule-schema" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+sha2 = "=0.10.9"
 rustix = { version = "1", features = ["fs"] }
 tempfile = "3.20"
 
