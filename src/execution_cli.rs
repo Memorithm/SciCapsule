@@ -20,6 +20,8 @@ use std::io::Read;
 use std::path::Path;
 use std::path::PathBuf;
 use std::process::{Command, ExitStatus, Stdio};
+#[cfg(unix)]
+use std::sync::Mutex;
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -32,6 +34,9 @@ const MAX_ENVIRONMENT_ENTRIES: usize = 128;
 const MAX_ENVIRONMENT_BYTES: usize = 64 * 1024;
 const MAX_ARGUMENTS: usize = 256;
 const MAX_ARGUMENT_BYTES: usize = 64 * 1024;
+
+#[cfg(unix)]
+static EXECUTION_SPAWN_LOCK: Mutex<()> = Mutex::new(());
 
 #[derive(Debug, Eq, PartialEq)]
 struct RunCommand {
@@ -459,6 +464,16 @@ fn execute(command: RunCommand) -> Result<String, ProductError> {
         .verify(&capsule_bytes, &signatures)
         .map_err(|error| ProductError::operation(format!("execution trust failed: {error}")))?;
 
+    // Linux can return ETXTBSY when one thread forks while another thread still
+    // has a soon-to-be-executed file open for writing: the child temporarily
+    // inherits that writable descriptor until exec closes it. Serialize only
+    // SciCapsule's materialize-to-spawn window so concurrent executions in one
+    // process cannot create that race. The lock is released immediately after
+    // Command::spawn returns; payload execution itself remains concurrent.
+    let spawn_window = EXECUTION_SPAWN_LOCK.lock().map_err(|_| {
+        ProductError::operation("execution materialize/spawn serialization lock is poisoned")
+    })?;
+
     let materialization_parent = tempfile::Builder::new()
         .prefix("scicapsule-run-")
         .tempdir()
@@ -510,6 +525,8 @@ fn execute(command: RunCommand) -> Result<String, ProductError> {
             capsule.manifest().entrypoint()
         ))
     })?;
+    drop(spawn_window);
+
     let stdout = child
         .stdout
         .take()
