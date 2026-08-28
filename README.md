@@ -113,9 +113,40 @@ satisfy a multi-key threshold. Signatures from keys absent from the local
 policy do not count. Trust policies and security-sensitive sidecars are bounded
 and opened with no-follow semantics on Unix.
 
-`inspect`, `verify`, `extract`, `sign`, `verify-signature`, and
-`verify-trusted` preserve the canonical format boundary. Trust policy,
-provenance, and execution remain separate product layers. See
-[the security model](docs/SECURITY_MODEL.md),
-[the detached signature specification](docs/SIGNATURES.md), and
-[the trust policy specification](docs/TRUST_POLICY.md).
+## Trusted bounded execution
+
+On Unix, `run` verifies canonical capsule integrity and the explicit local trust
+policy before materializing or launching any payload. It then executes exactly
+the manifest entrypoint, directly and without shell interpolation:
+
+```text
+scicapsule run demo.scicap \
+  --policy release-policy.json \
+  --signature demo.release-a.sig \
+  --signature demo.release-b.sig \
+  --timeout-seconds 30 \
+  --max-files 4096 \
+  --max-bytes 1073741824 \
+  --env LANG=C \
+  -- --example literal-argument
+```
+
+The run directory is private and temporary, the entrypoint working directory is
+the materialized capsule root, inherited environment variables are cleared,
+stdin is null, and only explicit `--env NAME=VALUE` entries are added. Arguments
+after `--` are passed verbatim. A wall-clock timeout and a dedicated Unix
+process group prevent the entrypoint and its descendants from outliving the
+runner.
+
+**This is not an OS sandbox.** SciCapsule v1 does not isolate filesystem access,
+networking, syscalls, user privileges, CPU, or memory. Use an external sandbox,
+container, VM, or other OS isolation layer when executing hostile payloads.
+Non-Unix execution fails closed rather than silently weakening these process
+lifecycle guarantees.
+
+`inspect`, `verify`, `extract`, `sign`, `verify-signature`, `verify-trusted`,
+and `run` preserve the canonical format boundary. Trust policy, provenance, and
+execution remain separate product layers. See [the security model](docs/SECURITY_MODEL.md),
+[the detached signature specification](docs/SIGNATURES.md),
+[the trust policy specification](docs/TRUST_POLICY.md), and
+[the execution security contract](docs/EXECUTION.md).

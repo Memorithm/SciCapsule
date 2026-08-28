@@ -1,5 +1,6 @@
 #![forbid(unsafe_code)]
 
+mod execution_cli;
 mod provenance;
 mod provenance_cli;
 mod signature;
@@ -101,6 +102,9 @@ fn main() -> ExitCode {
 }
 
 fn run_product(args: &[String]) -> Result<String, ProductError> {
+    if execution_cli::handles(args) {
+        return execution_cli::run(args);
+    }
     if provenance_cli::handles(args) {
         return provenance_cli::run(args);
     }
@@ -151,6 +155,7 @@ SIGNATURE AND TRUST OPTIONS:\n\
     --require N         Minimum number of distinct trusted signing keys required\n",
     );
     help.push_str(provenance_cli::help_text());
+    help.push_str(execution_cli::help_text());
     help
 }
 
