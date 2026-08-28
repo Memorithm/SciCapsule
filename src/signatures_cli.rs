@@ -1,6 +1,9 @@
 use crate::signature::SignatureEnvelope;
 use crate::trust::{TrustPolicy, MAX_SIGNATURES};
-use crate::{read_regular_file_bounded, take_unique_value, take_value, CliError, DEFAULT_CAPSULE_READ_LIMIT};
+use crate::{
+    read_regular_file_bounded, read_regular_input_bounded, take_unique_value, CliError,
+    DEFAULT_CAPSULE_READ_LIMIT,
+};
 use scirust_capsule::Capsule;
 use serde::Serialize;
 use std::path::PathBuf;
@@ -72,7 +75,11 @@ pub(crate) fn run(args: &[String]) -> Result<String, CliError> {
     let mut envelopes = Vec::with_capacity(command.signatures.len());
     let mut summaries = Vec::with_capacity(command.signatures.len());
     for signature_path in &command.signatures {
-        let encoded = read_regular_file_bounded(signature_path, MAX_SIGNATURE_ENVELOPE_BYTES)?;
+        let encoded = read_regular_input_bounded(
+            signature_path,
+            MAX_SIGNATURE_ENVELOPE_BYTES,
+            "signature envelope",
+        )?;
         let envelope = SignatureEnvelope::from_json(&encoded).map_err(|error| {
             CliError::operation(format!(
                 "invalid signature envelope {}: {error}",
@@ -88,7 +95,8 @@ pub(crate) fn run(args: &[String]) -> Result<String, CliError> {
     }
 
     let trust = if let Some(policy_path) = command.policy {
-        let encoded = read_regular_file_bounded(&policy_path, MAX_TRUST_POLICY_BYTES)?;
+        let encoded =
+            read_regular_input_bounded(&policy_path, MAX_TRUST_POLICY_BYTES, "trust policy")?;
         let policy = TrustPolicy::from_json(&encoded)
             .map_err(|error| CliError::operation(format!("invalid trust policy: {error}")))?;
         let decision = policy.verify(&capsule_bytes, &envelopes).map_err(|error| {
@@ -176,6 +184,14 @@ fn parse(args: &[String]) -> Result<SignaturesCommand, CliError> {
     })
 }
 
+fn take_value(args: &[String], index: &mut usize, option: &str) -> Result<String, CliError> {
+    *index += 1;
+    args.get(*index)
+        .filter(|value| !value.is_empty())
+        .cloned()
+        .ok_or_else(|| CliError::usage(format!("{option} requires a value")))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -223,11 +239,8 @@ mod tests {
             .unwrap();
         let envelope = sign_capsule(&capsule_bytes, &private_pem).unwrap();
         fs::write(&signature_path, envelope.to_json().unwrap()).unwrap();
-        let policy = TrustPolicy::from_named_pem_keys(
-            1,
-            vec![("release".to_owned(), public_pem)],
-        )
-        .unwrap();
+        let policy =
+            TrustPolicy::from_named_pem_keys(1, vec![("release".to_owned(), public_pem)]).unwrap();
         fs::write(&policy_path, policy.to_json().unwrap()).unwrap();
 
         (dir, capsule_path, signature_path, policy_path)
@@ -262,7 +275,10 @@ mod tests {
         let value: serde_json::Value = serde_json::from_str(&output).unwrap();
         assert_eq!(value["signature_count"], 1);
         assert_eq!(value["trust"]["trusted"], true);
-        assert_eq!(value["trust"]["matched_signers"], serde_json::json!(["release"]));
+        assert_eq!(
+            value["trust"]["matched_signers"],
+            serde_json::json!(["release"])
+        );
         assert_eq!(value["trust"]["required_signatures"], 1);
     }
 
