@@ -10,7 +10,9 @@ use scicapsule::extraction::{
 use scirust_capsule::Capsule;
 use std::collections::BTreeSet;
 use std::fs;
-use std::path::{Path, PathBuf};
+#[cfg(all(test, unix))]
+use std::path::Path;
+use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
