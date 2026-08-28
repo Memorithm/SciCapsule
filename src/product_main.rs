@@ -1,6 +1,7 @@
 #![forbid(unsafe_code)]
 
 mod signature;
+mod trust;
 
 use scirust_capsule::Capsule;
 use signature::{sign_capsule, verify_capsule_signature, SignatureEnvelope};
@@ -9,9 +10,11 @@ use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
+use trust::{TrustPolicy, MAX_SIGNATURES, MAX_TRUSTED_KEYS};
 
 const MAX_SIGNATURE_ENVELOPE_BYTES: u64 = 16 * 1024;
 const MAX_KEY_FILE_BYTES: u64 = 64 * 1024;
+const MAX_TRUST_POLICY_BYTES: u64 = 256 * 1024;
 
 #[derive(Debug, Eq, PartialEq)]
 enum ProductCommand {
@@ -26,6 +29,16 @@ enum ProductCommand {
         capsule: PathBuf,
         signature: PathBuf,
         key: PathBuf,
+    },
+    CreateTrustPolicy {
+        output: PathBuf,
+        minimum_signatures: u32,
+        keys: Vec<(String, PathBuf)>,
+    },
+    VerifyTrusted {
+        capsule: PathBuf,
+        policy: PathBuf,
+        signatures: Vec<PathBuf>,
     },
 }
 
@@ -99,21 +112,37 @@ fn run_product(args: &[String]) -> Result<String, ProductError> {
             signature,
             key,
         } => verify_signature_command(&capsule, &signature, &key),
+        ProductCommand::CreateTrustPolicy {
+            output,
+            minimum_signatures,
+            keys,
+        } => create_trust_policy_command(&output, minimum_signatures, &keys),
+        ProductCommand::VerifyTrusted {
+            capsule,
+            policy,
+            signatures,
+        } => verify_trusted_command(&capsule, &policy, &signatures),
     }
 }
 
 fn help_text() -> String {
     let mut help = scicapsule::help_text();
     help.push_str(
-        "\nSIGNATURE COMMANDS:\n\
+        "\nSIGNATURE AND TRUST COMMANDS:\n\
     scicapsule sign FILE --key PRIVATE_KEY.pem --output FILE.sig\n\
-    scicapsule verify-signature FILE --signature FILE.sig --key PUBLIC_KEY.pem\n\n\
-    sign               Verify a canonical capsule, then create a detached Ed25519 v1 signature\n\
-    verify-signature   Verify capsule integrity and a detached signature against an explicit key\n\n\
-SIGNATURE OPTIONS:\n\
+    scicapsule verify-signature FILE --signature FILE.sig --key PUBLIC_KEY.pem\n\
+    scicapsule create-trust-policy --output POLICY.json --require N NAME=PUBLIC_KEY.pem ...\n\
+    scicapsule verify-trusted FILE --policy POLICY.json --signature FILE.sig [--signature FILE.sig ...]\n\n\
+    sign                 Verify a canonical capsule, then create a detached Ed25519 v1 signature\n\
+    verify-signature     Verify capsule integrity and a detached signature against an explicit key\n\
+    create-trust-policy  Create a versioned local Ed25519 trust policy from explicit public keys\n\
+    verify-trusted       Require a policy threshold of distinct trusted signing keys\n\n\
+SIGNATURE AND TRUST OPTIONS:\n\
     --key FILE          PKCS#8 private PEM for sign; SPKI public PEM for verify-signature\n\
-    --output FILE       New detached signature envelope; existing files are never overwritten\n\
-    --signature FILE    Detached signature envelope to verify\n",
+    --output FILE       New output file; existing files are never overwritten\n\
+    --signature FILE    Detached signature envelope; repeatable for verify-trusted\n\
+    --policy FILE       Local trust-policy JSON file\n\
+    --require N         Minimum number of distinct trusted signing keys required\n",
     );
     help
 }
@@ -124,6 +153,8 @@ fn parse_product_command(args: &[String]) -> Result<ProductCommand, ProductError
         [argument] if argument == "-h" || argument == "--help" => Ok(ProductCommand::Help),
         [command, rest @ ..] if command == "sign" => parse_sign(rest),
         [command, rest @ ..] if command == "verify-signature" => parse_verify_signature(rest),
+        [command, rest @ ..] if command == "create-trust-policy" => parse_create_trust_policy(rest),
+        [command, rest @ ..] if command == "verify-trusted" => parse_verify_trusted(rest),
         _ => Ok(ProductCommand::Delegate),
     }
 }
@@ -229,6 +260,140 @@ fn parse_verify_signature(args: &[String]) -> Result<ProductCommand, ProductErro
     })
 }
 
+fn parse_create_trust_policy(args: &[String]) -> Result<ProductCommand, ProductError> {
+    if matches!(args, [argument] if argument == "-h" || argument == "--help") {
+        return Ok(ProductCommand::Help);
+    }
+
+    let mut output = None;
+    let mut minimum_signatures = None;
+    let mut keys = Vec::new();
+    let mut index = 0;
+    while index < args.len() {
+        match args[index].as_str() {
+            "--output" => {
+                output = Some(PathBuf::from(take_unique_value(
+                    args,
+                    &mut index,
+                    "--output",
+                    output.is_some(),
+                )?));
+            }
+            "--require" => {
+                let raw = take_unique_value(
+                    args,
+                    &mut index,
+                    "--require",
+                    minimum_signatures.is_some(),
+                )?;
+                let value = raw.parse::<u32>().map_err(|_| {
+                    ProductError::usage(format!("--require expects a positive integer, got {raw:?}"))
+                })?;
+                if value == 0 {
+                    return Err(ProductError::usage("--require must be at least 1"));
+                }
+                minimum_signatures = Some(value);
+            }
+            argument if argument.starts_with('-') => {
+                return Err(ProductError::usage(format!(
+                    "unknown create-trust-policy option: {argument}"
+                )));
+            }
+            mapping => {
+                let (name, path) = mapping.split_once('=').ok_or_else(|| {
+                    ProductError::usage(format!(
+                        "trusted key mapping must be NAME=PUBLIC_KEY.pem: {mapping}"
+                    ))
+                })?;
+                if name.is_empty() || path.is_empty() {
+                    return Err(ProductError::usage(format!(
+                        "trusted key mapping must contain a non-empty name and path: {mapping}"
+                    )));
+                }
+                keys.push((name.to_owned(), PathBuf::from(path)));
+                if keys.len() > MAX_TRUSTED_KEYS {
+                    return Err(ProductError::usage(format!(
+                        "too many trusted keys; limit is {MAX_TRUSTED_KEYS}"
+                    )));
+                }
+            }
+        }
+        index += 1;
+    }
+
+    if keys.is_empty() {
+        return Err(ProductError::usage(
+            "create-trust-policy requires at least one NAME=PUBLIC_KEY.pem mapping",
+        ));
+    }
+
+    Ok(ProductCommand::CreateTrustPolicy {
+        output: output
+            .ok_or_else(|| ProductError::usage("create-trust-policy requires --output FILE"))?,
+        minimum_signatures: minimum_signatures
+            .ok_or_else(|| ProductError::usage("create-trust-policy requires --require N"))?,
+        keys,
+    })
+}
+
+fn parse_verify_trusted(args: &[String]) -> Result<ProductCommand, ProductError> {
+    if matches!(args, [argument] if argument == "-h" || argument == "--help") {
+        return Ok(ProductCommand::Help);
+    }
+
+    let mut capsule = None;
+    let mut policy = None;
+    let mut signatures = Vec::new();
+    let mut index = 0;
+    while index < args.len() {
+        match args[index].as_str() {
+            "--policy" => {
+                policy = Some(PathBuf::from(take_unique_value(
+                    args,
+                    &mut index,
+                    "--policy",
+                    policy.is_some(),
+                )?));
+            }
+            "--signature" => {
+                let value = take_value(args, &mut index, "--signature")?;
+                signatures.push(PathBuf::from(value));
+                if signatures.len() > MAX_SIGNATURES {
+                    return Err(ProductError::usage(format!(
+                        "too many --signature values; limit is {MAX_SIGNATURES}"
+                    )));
+                }
+            }
+            argument if argument.starts_with('-') => {
+                return Err(ProductError::usage(format!(
+                    "unknown verify-trusted option: {argument}"
+                )));
+            }
+            argument if capsule.is_none() => capsule = Some(PathBuf::from(argument)),
+            argument => {
+                return Err(ProductError::usage(format!(
+                    "unexpected verify-trusted argument: {argument}"
+                )));
+            }
+        }
+        index += 1;
+    }
+
+    if signatures.is_empty() {
+        return Err(ProductError::usage(
+            "verify-trusted requires at least one --signature FILE",
+        ));
+    }
+
+    Ok(ProductCommand::VerifyTrusted {
+        capsule: capsule
+            .ok_or_else(|| ProductError::usage("verify-trusted requires a capsule file"))?,
+        policy: policy
+            .ok_or_else(|| ProductError::usage("verify-trusted requires --policy FILE"))?,
+        signatures,
+    })
+}
+
 fn take_unique_value(
     args: &[String],
     index: &mut usize,
@@ -240,6 +405,10 @@ fn take_unique_value(
             "{option} may be specified only once"
         )));
     }
+    take_value(args, index, option)
+}
+
+fn take_value(args: &[String], index: &mut usize, option: &str) -> Result<String, ProductError> {
     *index += 1;
     args.get(*index)
         .filter(|value| !value.is_empty())
@@ -265,7 +434,7 @@ fn sign_command(
     let encoded = envelope.to_json().map_err(|error| {
         ProductError::operation(format!("cannot encode signature envelope: {error}"))
     })?;
-    write_new_file(output, &encoded)?;
+    write_new_file(output, &encoded, "signature file")?;
 
     Ok(format!(
         "signed {}: {} -> {}\n",
@@ -304,6 +473,77 @@ fn verify_signature_command(
         capsule_path.display(),
         capsule.manifest().name(),
         signature_path.display()
+    ))
+}
+
+fn create_trust_policy_command(
+    output: &Path,
+    minimum_signatures: u32,
+    keys: &[(String, PathBuf)],
+) -> Result<String, ProductError> {
+    let mut pem_keys = Vec::with_capacity(keys.len());
+    for (name, path) in keys {
+        let pem = read_regular_utf8_bounded(path, MAX_KEY_FILE_BYTES, "trusted public key")?;
+        pem_keys.push((name.clone(), pem));
+    }
+    let policy = TrustPolicy::from_named_pem_keys(minimum_signatures, pem_keys)
+        .map_err(|error| ProductError::operation(format!("invalid trust policy: {error}")))?;
+    let encoded = policy
+        .to_json()
+        .map_err(|error| ProductError::operation(format!("cannot encode trust policy: {error}")))?;
+    write_new_file(output, &encoded, "trust policy")?;
+
+    Ok(format!(
+        "created trust policy {}: require {} of {} trusted key(s)\n",
+        output.display(),
+        policy.minimum_signatures,
+        policy.trusted_keys.len()
+    ))
+}
+
+fn verify_trusted_command(
+    capsule_path: &Path,
+    policy_path: &Path,
+    signature_paths: &[PathBuf],
+) -> Result<String, ProductError> {
+    let capsule_bytes = read_file(capsule_path)?;
+    let capsule = Capsule::decode(&capsule_bytes).map_err(|error| {
+        ProductError::operation(format!(
+            "invalid capsule {}: {error}",
+            capsule_path.display()
+        ))
+    })?;
+
+    let policy_bytes = read_regular_file_bounded(policy_path, MAX_TRUST_POLICY_BYTES, "trust policy")?;
+    let policy = TrustPolicy::from_json(&policy_bytes)
+        .map_err(|error| ProductError::operation(format!("invalid trust policy: {error}")))?;
+
+    let mut signatures = Vec::with_capacity(signature_paths.len());
+    for signature_path in signature_paths {
+        let signature_bytes = read_regular_file_bounded(
+            signature_path,
+            MAX_SIGNATURE_ENVELOPE_BYTES,
+            "signature envelope",
+        )?;
+        let envelope = SignatureEnvelope::from_json(&signature_bytes).map_err(|error| {
+            ProductError::operation(format!(
+                "invalid signature envelope {}: {error}",
+                signature_path.display()
+            ))
+        })?;
+        signatures.push(envelope);
+    }
+
+    let decision = policy
+        .verify(&capsule_bytes, &signatures)
+        .map_err(|error| ProductError::operation(format!("trust verification failed: {error}")))?;
+
+    Ok(format!(
+        "trusted {}: {} matched [{}], require {}\n",
+        capsule_path.display(),
+        capsule.manifest().name(),
+        decision.matched_signers.join(","),
+        decision.required_signatures
     ))
 }
 
@@ -408,7 +648,7 @@ fn open_regular_nofollow(path: &Path, label: &str) -> Result<File, ProductError>
     })
 }
 
-fn write_new_file(path: &Path, bytes: &[u8]) -> Result<(), ProductError> {
+fn write_new_file(path: &Path, bytes: &[u8], label: &str) -> Result<(), ProductError> {
     let mut options = OpenOptions::new();
     options.write(true).create_new(true);
     #[cfg(unix)]
@@ -419,7 +659,7 @@ fn write_new_file(path: &Path, bytes: &[u8]) -> Result<(), ProductError> {
 
     let mut file = options.open(path).map_err(|error| {
         ProductError::operation(format!(
-            "cannot create new signature file {}: {error}",
+            "cannot create new {label} {}: {error}",
             path.display()
         ))
     })?;
@@ -427,10 +667,7 @@ fn write_new_file(path: &Path, bytes: &[u8]) -> Result<(), ProductError> {
         .write_all(bytes)
         .and_then(|()| file.sync_all())
         .map_err(|error| {
-            ProductError::operation(format!(
-                "cannot write signature file {}: {error}",
-                path.display()
-            ))
+            ProductError::operation(format!("cannot write {label} {}: {error}", path.display()))
         });
     if result.is_err() {
         let _ = fs::remove_file(path);
@@ -500,16 +737,48 @@ mod tests {
         capsule
     }
 
+    fn sign_file(capsule: &Path, private_key: &Path, output: &Path) {
+        run_product(&[
+            "sign".to_owned(),
+            capsule.display().to_string(),
+            "--key".to_owned(),
+            private_key.display().to_string(),
+            "--output".to_owned(),
+            output.display().to_string(),
+        ])
+        .unwrap();
+    }
+
+    fn create_policy(
+        output: &Path,
+        required: u32,
+        keys: &[(&str, &Path)],
+    ) -> Result<String, ProductError> {
+        let mut command = vec![
+            "create-trust-policy".to_owned(),
+            "--output".to_owned(),
+            output.display().to_string(),
+            "--require".to_owned(),
+            required.to_string(),
+        ];
+        for (name, path) in keys {
+            command.push(format!("{name}={}", path.display()));
+        }
+        run_product(&command)
+    }
+
     #[test]
-    fn help_exposes_signature_commands_without_changing_core_verify_semantics() {
+    fn help_exposes_signature_and_trust_commands_without_changing_core_verify_semantics() {
         let help = help_text();
         assert!(help.contains("scicapsule sign FILE"));
         assert!(help.contains("scicapsule verify-signature FILE"));
+        assert!(help.contains("scicapsule create-trust-policy"));
+        assert!(help.contains("scicapsule verify-trusted FILE"));
         assert!(help.contains("verify canonical encoding, lengths, and payload SHA-256"));
     }
 
     #[test]
-    fn parser_requires_explicit_key_signature_and_output_paths() {
+    fn parser_requires_explicit_signature_and_trust_inputs() {
         let sign = parse_product_command(&args(&["sign", "demo.scicap"])).unwrap_err();
         assert!(sign.usage);
         assert!(sign.to_string().contains("--key"));
@@ -523,6 +792,26 @@ mod tests {
         .unwrap_err();
         assert!(verify.usage);
         assert!(verify.to_string().contains("--signature"));
+
+        let policy = parse_product_command(&args(&[
+            "create-trust-policy",
+            "--output",
+            "policy.json",
+            "release=public.pem",
+        ]))
+        .unwrap_err();
+        assert!(policy.usage);
+        assert!(policy.to_string().contains("--require"));
+
+        let trusted = parse_product_command(&args(&[
+            "verify-trusted",
+            "demo.scicap",
+            "--policy",
+            "policy.json",
+        ]))
+        .unwrap_err();
+        assert!(trusted.usage);
+        assert!(trusted.to_string().contains("--signature"));
     }
 
     #[test]
@@ -532,16 +821,7 @@ mod tests {
         let (private, public) = write_keys(&dir, 17);
         let envelope = dir.join("demo.sig");
 
-        let signed = run_product(&[
-            "sign".to_owned(),
-            capsule.display().to_string(),
-            "--key".to_owned(),
-            private.display().to_string(),
-            "--output".to_owned(),
-            envelope.display().to_string(),
-        ])
-        .unwrap();
-        assert!(signed.contains("signed"));
+        sign_file(&capsule, &private, &envelope);
 
         let verified = run_product(&[
             "verify-signature".to_owned(),
@@ -557,6 +837,91 @@ mod tests {
     }
 
     #[test]
+    fn trust_policy_requires_distinct_trusted_signers() {
+        let dir = test_dir("trust-threshold");
+        let capsule = pack_capsule(&dir);
+        let (private_a, public_a) = write_keys(&dir, 41);
+        let (private_b, public_b) = write_keys(&dir, 42);
+        let sig_a = dir.join("a.sig");
+        let sig_b = dir.join("b.sig");
+        let policy = dir.join("policy.json");
+        sign_file(&capsule, &private_a, &sig_a);
+        sign_file(&capsule, &private_b, &sig_b);
+        create_policy(
+            &policy,
+            2,
+            &[("alpha", public_a.as_path()), ("beta", public_b.as_path())],
+        )
+        .unwrap();
+
+        let duplicate_error = run_product(&[
+            "verify-trusted".to_owned(),
+            capsule.display().to_string(),
+            "--policy".to_owned(),
+            policy.display().to_string(),
+            "--signature".to_owned(),
+            sig_a.display().to_string(),
+            "--signature".to_owned(),
+            sig_a.display().to_string(),
+        ])
+        .unwrap_err();
+        assert!(duplicate_error.to_string().contains("threshold not met"));
+
+        let trusted = run_product(&[
+            "verify-trusted".to_owned(),
+            capsule.display().to_string(),
+            "--policy".to_owned(),
+            policy.display().to_string(),
+            "--signature".to_owned(),
+            sig_b.display().to_string(),
+            "--signature".to_owned(),
+            sig_a.display().to_string(),
+        ])
+        .unwrap();
+        assert!(trusted.contains("matched [alpha,beta]"));
+        assert!(trusted.contains("require 2"));
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn trust_policy_rejects_unknown_signer_and_malformed_policy() {
+        let dir = test_dir("trust-negative");
+        let capsule = pack_capsule(&dir);
+        let (_, public_trusted) = write_keys(&dir, 51);
+        let (private_unknown, _) = write_keys(&dir, 52);
+        let sig_unknown = dir.join("unknown.sig");
+        let policy = dir.join("policy.json");
+        sign_file(&capsule, &private_unknown, &sig_unknown);
+        create_policy(&policy, 1, &[("release", public_trusted.as_path())]).unwrap();
+
+        let unknown_error = run_product(&[
+            "verify-trusted".to_owned(),
+            capsule.display().to_string(),
+            "--policy".to_owned(),
+            policy.display().to_string(),
+            "--signature".to_owned(),
+            sig_unknown.display().to_string(),
+        ])
+        .unwrap_err();
+        assert!(unknown_error.to_string().contains("threshold not met"));
+
+        let mut value: serde_json::Value = serde_json::from_slice(&fs::read(&policy).unwrap()).unwrap();
+        value["version"] = serde_json::Value::from(999_u64);
+        fs::write(&policy, serde_json::to_vec(&value).unwrap()).unwrap();
+        let malformed_error = run_product(&[
+            "verify-trusted".to_owned(),
+            capsule.display().to_string(),
+            "--policy".to_owned(),
+            policy.display().to_string(),
+            "--signature".to_owned(),
+            sig_unknown.display().to_string(),
+        ])
+        .unwrap_err();
+        assert!(malformed_error.to_string().contains("unsupported trust policy version"));
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
     fn verification_rejects_wrong_key_and_tampered_capsule() {
         let dir = test_dir("negative");
         let capsule = pack_capsule(&dir);
@@ -564,15 +929,7 @@ mod tests {
         let (_, wrong_public) = write_keys(&dir, 24);
         let envelope = dir.join("demo.sig");
 
-        run_product(&[
-            "sign".to_owned(),
-            capsule.display().to_string(),
-            "--key".to_owned(),
-            private.display().to_string(),
-            "--output".to_owned(),
-            envelope.display().to_string(),
-        ])
-        .unwrap();
+        sign_file(&capsule, &private, &envelope);
 
         let wrong_key_error = run_product(&[
             "verify-signature".to_owned(),
@@ -603,10 +960,10 @@ mod tests {
     }
 
     #[test]
-    fn sign_never_overwrites_an_existing_envelope() {
+    fn sign_and_policy_creation_never_overwrite_existing_outputs() {
         let dir = test_dir("no-clobber");
         let capsule = pack_capsule(&dir);
-        let (private, _) = write_keys(&dir, 29);
+        let (private, public) = write_keys(&dir, 29);
         let envelope = dir.join("demo.sig");
         fs::write(&envelope, b"existing").unwrap();
 
@@ -623,32 +980,48 @@ mod tests {
             .to_string()
             .contains("cannot create new signature file"));
         assert_eq!(fs::read(&envelope).unwrap(), b"existing");
+
+        let policy = dir.join("policy.json");
+        fs::write(&policy, b"existing-policy").unwrap();
+        let policy_error = create_policy(&policy, 1, &[("release", public.as_path())]).unwrap_err();
+        assert!(policy_error
+            .to_string()
+            .contains("cannot create new trust policy"));
+        assert_eq!(fs::read(&policy).unwrap(), b"existing-policy");
         fs::remove_dir_all(dir).unwrap();
     }
 
     #[cfg(unix)]
     #[test]
-    fn signature_key_inputs_reject_symlinks() {
+    fn security_sensitive_trust_inputs_reject_symlinks() {
         use std::os::unix::fs::symlink;
 
-        let dir = test_dir("key-symlink");
+        let dir = test_dir("trust-symlink");
         let capsule = pack_capsule(&dir);
-        let (private, _) = write_keys(&dir, 37);
-        let linked_private = dir.join("linked-private.pem");
-        let envelope = dir.join("demo.sig");
-        symlink(&private, &linked_private).unwrap();
+        let (private, public) = write_keys(&dir, 61);
+        let linked_public = dir.join("linked-public.pem");
+        let policy = dir.join("policy.json");
+        symlink(&public, &linked_public).unwrap();
 
-        let error = run_product(&[
-            "sign".to_owned(),
+        let key_error = create_policy(&policy, 1, &[("release", linked_public.as_path())]).unwrap_err();
+        assert!(key_error.to_string().contains("safely open trusted public key"));
+        assert!(!policy.exists());
+
+        create_policy(&policy, 1, &[("release", public.as_path())]).unwrap();
+        let linked_policy = dir.join("linked-policy.json");
+        symlink(&policy, &linked_policy).unwrap();
+        let signature = dir.join("demo.sig");
+        sign_file(&capsule, &private, &signature);
+        let policy_error = run_product(&[
+            "verify-trusted".to_owned(),
             capsule.display().to_string(),
-            "--key".to_owned(),
-            linked_private.display().to_string(),
-            "--output".to_owned(),
-            envelope.display().to_string(),
+            "--policy".to_owned(),
+            linked_policy.display().to_string(),
+            "--signature".to_owned(),
+            signature.display().to_string(),
         ])
         .unwrap_err();
-        assert!(error.to_string().contains("safely open private key"));
-        assert!(!envelope.exists());
+        assert!(policy_error.to_string().contains("safely open trust policy"));
         fs::remove_dir_all(dir).unwrap();
     }
 }
