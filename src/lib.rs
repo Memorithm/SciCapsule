@@ -5,8 +5,8 @@ pub mod extraction;
 use scirust_capsule::{Capsule, CapsulePayload};
 use scirust_capsule_schema::CapsulePath;
 use std::fmt;
-use std::fs::{self, File};
-use std::io::Read;
+use std::fs::{self, File, OpenOptions};
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
 use extraction::{
@@ -35,7 +35,7 @@ pub fn help_text() -> String {
         "{PRODUCT_NAME} {}\n\
 Portable, reproducible SciRust execution capsules.\n\n\
 USAGE:\n\
-    scicapsule pack --name NAME --entrypoint PATH --output FILE PATH=FILE [PATH=FILE ...]\n\
+    scicapsule pack --name NAME --entrypoint PATH --output FILE [--max-files N] [--max-bytes N] PATH=FILE [PATH=FILE ...]\n\
     scicapsule inspect FILE\n\
     scicapsule verify FILE\n\
     scicapsule extract FILE --output DIR [--max-files N] [--max-bytes N] [--json]\n\
@@ -48,8 +48,10 @@ COMMANDS:\n\
 PACK OPTIONS:\n\
     --name NAME          Human-readable capsule name\n\
     --entrypoint PATH    Portable payload path that is the capsule entrypoint\n\
-    --output FILE        Destination .scicap file\n\
-    PATH=FILE            Map a capsule payload path to a source file; repeatable\n\n\
+    --output FILE        New destination .scicap; existing paths are not overwritten\n\
+    --max-files N        Maximum payload mappings (default: 4096)\n\
+    --max-bytes N        Maximum aggregate payload bytes (default: 1073741824)\n\
+    PATH=FILE            Map a capsule payload path to a regular source file; repeatable\n\n\
 EXTRACT OPTIONS:\n\
     --output DIR         New destination directory; it must not already exist\n\
     --max-files N        Maximum files (default: 4096)\n\
@@ -106,6 +108,7 @@ enum Command {
         entrypoint: String,
         output: PathBuf,
         payload_specs: Vec<String>,
+        limits: ExtractionLimits,
     },
     Inspect(PathBuf),
     Verify(PathBuf),
@@ -127,7 +130,8 @@ pub fn run(args: &[String]) -> Result<String, CliError> {
             entrypoint,
             output,
             payload_specs,
-        } => pack_command(&name, &entrypoint, &output, &payload_specs),
+            limits,
+        } => pack_command(&name, &entrypoint, &output, &payload_specs, limits),
         Command::Inspect(path) => inspect_command(&path),
         Command::Verify(path) => verify_command(&path),
         Command::Extract {
@@ -237,6 +241,10 @@ fn parse_pack(args: &[String]) -> Result<Command, CliError> {
     let mut name = None;
     let mut entrypoint = None;
     let mut output = None;
+    let mut max_files = DEFAULT_EXTRACTION_LIMITS.max_files;
+    let mut max_bytes = DEFAULT_EXTRACTION_LIMITS.max_total_bytes;
+    let mut max_files_seen = false;
+    let mut max_bytes_seen = false;
     let mut payload_specs = Vec::new();
     let mut index = 0;
 
@@ -266,6 +274,20 @@ fn parse_pack(args: &[String]) -> Result<Command, CliError> {
                     output.is_some(),
                 )?));
             }
+            "--max-files" => {
+                let value = take_unique_value(args, &mut index, "--max-files", max_files_seen)?;
+                max_files = value
+                    .parse()
+                    .map_err(|_| CliError::usage("--max-files requires a non-negative integer"))?;
+                max_files_seen = true;
+            }
+            "--max-bytes" => {
+                let value = take_unique_value(args, &mut index, "--max-bytes", max_bytes_seen)?;
+                max_bytes = value
+                    .parse()
+                    .map_err(|_| CliError::usage("--max-bytes requires a non-negative integer"))?;
+                max_bytes_seen = true;
+            }
             argument if argument.starts_with('-') => {
                 return Err(CliError::usage(format!("unknown pack option: {argument}")));
             }
@@ -283,12 +305,23 @@ fn parse_pack(args: &[String]) -> Result<Command, CliError> {
             "pack requires at least one PATH=FILE payload mapping",
         ));
     }
+    if payload_specs.len() > max_files {
+        return Err(CliError::usage(format!(
+            "pack has {} payload mapping(s); --max-files limit is {}",
+            payload_specs.len(),
+            max_files
+        )));
+    }
 
     Ok(Command::Pack {
         name,
         entrypoint,
         output,
         payload_specs,
+        limits: ExtractionLimits {
+            max_files,
+            max_total_bytes: max_bytes,
+        },
     })
 }
 
@@ -315,14 +348,23 @@ fn pack_command(
     entrypoint: &str,
     output: &Path,
     payload_specs: &[String],
+    limits: ExtractionLimits,
 ) -> Result<String, CliError> {
     if name.trim().is_empty() {
         return Err(CliError::usage("--name must not be empty"));
+    }
+    if payload_specs.len() > limits.max_files {
+        return Err(CliError::operation(format!(
+            "pack has {} payload mapping(s); limit is {}",
+            payload_specs.len(),
+            limits.max_files
+        )));
     }
 
     let entrypoint = CapsulePath::new(entrypoint.to_owned())
         .map_err(|error| CliError::usage(format!("invalid --entrypoint: {error}")))?;
     let mut payloads = Vec::with_capacity(payload_specs.len());
+    let mut total_payload_bytes = 0_u64;
 
     for spec in payload_specs {
         let (capsule_path, source_path) = spec.split_once('=').ok_or_else(|| {
@@ -339,7 +381,16 @@ fn pack_command(
             CliError::usage(format!("invalid payload path {capsule_path:?}: {error}"))
         })?;
         let source_path = PathBuf::from(source_path);
-        let bytes = read_file(&source_path)?;
+        let remaining = limits
+            .max_total_bytes
+            .checked_sub(total_payload_bytes)
+            .ok_or_else(|| CliError::operation("pack payload byte accounting underflow"))?;
+        let bytes = read_payload_source_bounded(&source_path, remaining)?;
+        let payload_bytes = u64::try_from(bytes.len())
+            .map_err(|_| CliError::operation("payload source size cannot be represented as u64"))?;
+        total_payload_bytes = total_payload_bytes
+            .checked_add(payload_bytes)
+            .ok_or_else(|| CliError::operation("pack payload byte accounting overflow"))?;
         payloads.push(CapsulePayload::new(capsule_path, bytes));
     }
 
@@ -348,11 +399,12 @@ fn pack_command(
     let encoded = capsule
         .encode()
         .map_err(|error| CliError::operation(format!("cannot encode capsule: {error}")))?;
-    write_file(output, &encoded)?;
+    write_new_capsule(output, &encoded)?;
 
     Ok(format!(
-        "packed {} payload(s) into {} ({} bytes)\n",
+        "packed {} payload(s), {} payload bytes, into {} ({} encoded bytes)\n",
         capsule.payloads().len(),
+        total_payload_bytes,
         output.display(),
         encoded.len()
     ))
@@ -423,22 +475,37 @@ fn extract_command(
 }
 
 fn read_regular_file_bounded(path: &Path, maximum_bytes: u64) -> Result<Vec<u8>, CliError> {
+    read_regular_input_bounded(path, maximum_bytes, "capsule input")
+}
+
+fn read_payload_source_bounded(path: &Path, maximum_bytes: u64) -> Result<Vec<u8>, CliError> {
+    read_regular_input_bounded(path, maximum_bytes, "payload source")
+}
+
+fn read_regular_input_bounded(
+    path: &Path,
+    maximum_bytes: u64,
+    label: &str,
+) -> Result<Vec<u8>, CliError> {
     let read_limit = maximum_bytes
         .checked_add(1)
         .ok_or_else(|| CliError::usage("configured read limit is too large"))?;
-    let file = open_regular_nofollow(path)?;
+    let file = open_regular_nofollow(path, label)?;
     let metadata = file.metadata().map_err(|error| {
-        CliError::operation(format!("cannot inspect {}: {error}", path.display()))
+        CliError::operation(format!(
+            "cannot inspect {label} {}: {error}",
+            path.display()
+        ))
     })?;
     if !metadata.is_file() {
         return Err(CliError::operation(format!(
-            "refusing to read non-regular capsule input {}",
+            "refusing to read non-regular {label} {}",
             path.display()
         )));
     }
     if metadata.len() > maximum_bytes {
         return Err(CliError::operation(format!(
-            "capsule {} is {} bytes; read limit is {} bytes",
+            "{label} {} is {} bytes; read limit is {} bytes",
             path.display(),
             metadata.len(),
             maximum_bytes
@@ -448,10 +515,12 @@ fn read_regular_file_bounded(path: &Path, maximum_bytes: u64) -> Result<Vec<u8>,
     let mut bytes = Vec::new();
     file.take(read_limit)
         .read_to_end(&mut bytes)
-        .map_err(|error| CliError::operation(format!("cannot read {}: {error}", path.display())))?;
+        .map_err(|error| {
+            CliError::operation(format!("cannot read {label} {}: {error}", path.display()))
+        })?;
     if bytes.len() as u128 > u128::from(maximum_bytes) {
         return Err(CliError::operation(format!(
-            "capsule {} exceeded the {} byte read limit",
+            "{label} {} exceeded the {} byte read limit",
             path.display(),
             maximum_bytes
         )));
@@ -460,7 +529,7 @@ fn read_regular_file_bounded(path: &Path, maximum_bytes: u64) -> Result<Vec<u8>,
 }
 
 #[cfg(unix)]
-fn open_regular_nofollow(path: &Path) -> Result<File, CliError> {
+fn open_regular_nofollow(path: &Path, label: &str) -> Result<File, CliError> {
     let descriptor = rustix::fs::open(
         path,
         rustix::fs::OFlags::RDONLY
@@ -471,7 +540,7 @@ fn open_regular_nofollow(path: &Path) -> Result<File, CliError> {
     )
     .map_err(|error| {
         CliError::operation(format!(
-            "cannot safely open regular capsule input {}: {error}",
+            "cannot safely open regular {label} {}: {error}",
             path.display()
         ))
     })?;
@@ -479,28 +548,52 @@ fn open_regular_nofollow(path: &Path) -> Result<File, CliError> {
 }
 
 #[cfg(not(unix))]
-fn open_regular_nofollow(path: &Path) -> Result<File, CliError> {
+fn open_regular_nofollow(path: &Path, label: &str) -> Result<File, CliError> {
     let metadata = fs::symlink_metadata(path).map_err(|error| {
-        CliError::operation(format!("cannot inspect {}: {error}", path.display()))
+        CliError::operation(format!(
+            "cannot inspect {label} {}: {error}",
+            path.display()
+        ))
     })?;
     if !metadata.file_type().is_file() {
         return Err(CliError::operation(format!(
-            "refusing to read non-regular or linked capsule input {}",
+            "refusing to read non-regular or linked {label} {}",
             path.display()
         )));
     }
-    File::open(path)
-        .map_err(|error| CliError::operation(format!("cannot read {}: {error}", path.display())))
+    File::open(path).map_err(|error| {
+        CliError::operation(format!("cannot read {label} {}: {error}", path.display()))
+    })
 }
 
-fn read_file(path: &Path) -> Result<Vec<u8>, CliError> {
-    fs::read(path)
-        .map_err(|error| CliError::operation(format!("cannot read {}: {error}", path.display())))
-}
+fn write_new_capsule(path: &Path, bytes: &[u8]) -> Result<(), CliError> {
+    let mut options = OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o644);
+    }
 
-fn write_file(path: &Path, bytes: &[u8]) -> Result<(), CliError> {
-    fs::write(path, bytes)
-        .map_err(|error| CliError::operation(format!("cannot write {}: {error}", path.display())))
+    let mut file = options.open(path).map_err(|error| {
+        CliError::operation(format!(
+            "cannot create new capsule output {}: {error}",
+            path.display()
+        ))
+    })?;
+    let result = file
+        .write_all(bytes)
+        .and_then(|()| file.sync_all())
+        .map_err(|error| {
+            CliError::operation(format!(
+                "cannot write capsule output {}: {error}",
+                path.display()
+            ))
+        });
+    if result.is_err() {
+        let _ = fs::remove_file(path);
+    }
+    result
 }
 
 #[cfg(test)]
@@ -536,6 +629,8 @@ mod tests {
         assert!(help.contains("scicapsule inspect"));
         assert!(help.contains("scicapsule verify"));
         assert!(help.contains("scicapsule extract"));
+        assert!(help.contains("--max-files N"));
+        assert!(help.contains("--max-bytes N"));
     }
 
     #[test]
@@ -543,6 +638,47 @@ mod tests {
         let error = parse_command(&args(&["pack", "--name", "demo"])).unwrap_err();
         assert!(error.is_usage());
         assert!(error.to_string().contains("--entrypoint"));
+    }
+
+    #[test]
+    fn parser_rejects_pack_mapping_count_over_limit_before_source_reads() {
+        let error = parse_command(&args(&[
+            "pack",
+            "--name",
+            "demo",
+            "--entrypoint",
+            "bin/run",
+            "--output",
+            "demo.scicap",
+            "--max-files",
+            "1",
+            "bin/run=/missing-a",
+            "data/input=/missing-b",
+        ]))
+        .unwrap_err();
+        assert!(error.is_usage());
+        assert!(error.to_string().contains("--max-files limit is 1"));
+    }
+
+    #[test]
+    fn parser_rejects_duplicate_pack_resource_options() {
+        let error = parse_command(&args(&[
+            "pack",
+            "--name",
+            "demo",
+            "--entrypoint",
+            "bin/run",
+            "--output",
+            "demo.scicap",
+            "--max-bytes",
+            "1",
+            "--max-bytes",
+            "2",
+            "bin/run=run.bin",
+        ]))
+        .unwrap_err();
+        assert!(error.is_usage());
+        assert!(error.to_string().contains("only once"));
     }
 
     #[test]
@@ -604,6 +740,140 @@ mod tests {
         run(&first_args).unwrap();
         run(&second_args).unwrap();
         assert_eq!(fs::read(&first).unwrap(), fs::read(&second).unwrap());
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn pack_accepts_exact_aggregate_byte_limit_and_rejects_one_byte_less() {
+        let dir = test_dir("pack-byte-budget");
+        let runner = dir.join("run.bin");
+        let data = dir.join("data.bin");
+        let exact = dir.join("exact.scicap");
+        let too_small = dir.join("too-small.scicap");
+        fs::write(&runner, b"abc").unwrap();
+        fs::write(&data, b"def").unwrap();
+        let runner_spec = format!("bin/run={}", runner.display());
+        let data_spec = format!("data/input={}", data.display());
+
+        let exact_result = run(&[
+            "pack".to_owned(),
+            "--name".to_owned(),
+            "demo".to_owned(),
+            "--entrypoint".to_owned(),
+            "bin/run".to_owned(),
+            "--output".to_owned(),
+            exact.display().to_string(),
+            "--max-bytes".to_owned(),
+            "6".to_owned(),
+            runner_spec.clone(),
+            data_spec.clone(),
+        ])
+        .unwrap();
+        assert!(exact_result.contains("6 payload bytes"));
+
+        let error = run(&[
+            "pack".to_owned(),
+            "--name".to_owned(),
+            "demo".to_owned(),
+            "--entrypoint".to_owned(),
+            "bin/run".to_owned(),
+            "--output".to_owned(),
+            too_small.display().to_string(),
+            "--max-bytes".to_owned(),
+            "5".to_owned(),
+            runner_spec,
+            data_spec,
+        ])
+        .unwrap_err();
+        assert!(error.to_string().contains("payload source"));
+        assert!(error.to_string().contains("read limit"));
+        assert!(!too_small.exists());
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn pack_rejects_sparse_source_over_budget_before_reading() {
+        let dir = test_dir("pack-sparse-source");
+        let source = dir.join("run.bin");
+        let output = dir.join("demo.scicap");
+        let file = File::create(&source).unwrap();
+        file.set_len(9).unwrap();
+        let source_spec = format!("bin/run={}", source.display());
+
+        let error = run(&[
+            "pack".to_owned(),
+            "--name".to_owned(),
+            "demo".to_owned(),
+            "--entrypoint".to_owned(),
+            "bin/run".to_owned(),
+            "--output".to_owned(),
+            output.display().to_string(),
+            "--max-bytes".to_owned(),
+            "8".to_owned(),
+            source_spec,
+        ])
+        .unwrap_err();
+        assert!(error.to_string().contains("payload source"));
+        assert!(error.to_string().contains("read limit is 8 bytes"));
+        assert!(!output.exists());
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn pack_rejects_symlink_payload_source() {
+        use std::os::unix::fs::symlink;
+
+        let dir = test_dir("pack-source-symlink");
+        let source = dir.join("real.bin");
+        let linked = dir.join("linked.bin");
+        let output = dir.join("demo.scicap");
+        fs::write(&source, b"runner").unwrap();
+        symlink(&source, &linked).unwrap();
+        let source_spec = format!("bin/run={}", linked.display());
+
+        let error = run(&[
+            "pack".to_owned(),
+            "--name".to_owned(),
+            "demo".to_owned(),
+            "--entrypoint".to_owned(),
+            "bin/run".to_owned(),
+            "--output".to_owned(),
+            output.display().to_string(),
+            source_spec,
+        ])
+        .unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("safely open regular payload source"));
+        assert!(!output.exists());
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn pack_never_overwrites_existing_output() {
+        let dir = test_dir("pack-no-clobber");
+        let source = dir.join("run.bin");
+        let output = dir.join("demo.scicap");
+        fs::write(&source, b"runner").unwrap();
+        fs::write(&output, b"existing").unwrap();
+        let source_spec = format!("bin/run={}", source.display());
+
+        let error = run(&[
+            "pack".to_owned(),
+            "--name".to_owned(),
+            "demo".to_owned(),
+            "--entrypoint".to_owned(),
+            "bin/run".to_owned(),
+            "--output".to_owned(),
+            output.display().to_string(),
+            source_spec,
+        ])
+        .unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("cannot create new capsule output"));
+        assert_eq!(fs::read(&output).unwrap(), b"existing");
         fs::remove_dir_all(dir).unwrap();
     }
 
