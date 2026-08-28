@@ -108,13 +108,14 @@ pub fn verify_capsule_signature_with_public_key_bytes(
     envelope: &SignatureEnvelope,
     public_key: &[u8],
 ) -> Result<(), SignatureModelError> {
-    let key_bytes: [u8; ed25519_dalek::PUBLIC_KEY_LENGTH] = public_key.try_into().map_err(|_| {
-        SignatureModelError::new(format!(
-            "invalid Ed25519 public key length {}; expected {} bytes",
-            public_key.len(),
-            ed25519_dalek::PUBLIC_KEY_LENGTH
-        ))
-    })?;
+    let key_bytes: [u8; ed25519_dalek::PUBLIC_KEY_LENGTH] =
+        public_key.try_into().map_err(|_| {
+            SignatureModelError::new(format!(
+                "invalid Ed25519 public key length {}; expected {} bytes",
+                public_key.len(),
+                ed25519_dalek::PUBLIC_KEY_LENGTH
+            ))
+        })?;
     let verifying_key = VerifyingKey::from_bytes(&key_bytes)
         .map_err(|_| SignatureModelError::new("invalid Ed25519 public key bytes"))?;
     verify_capsule_signature_with_key(capsule_bytes, envelope, &verifying_key)
@@ -205,7 +206,8 @@ mod tests {
         let envelope = sign_capsule(capsule, &private_key).unwrap();
 
         verify_capsule_signature(capsule, &envelope, &public_key).unwrap();
-        verify_capsule_signature_with_public_key_bytes(capsule, &envelope, &raw_public_key).unwrap();
+        verify_capsule_signature_with_public_key_bytes(capsule, &envelope, &raw_public_key)
+            .unwrap();
         assert!(verify_capsule_signature(b"tampered", &envelope, &public_key).is_err());
         assert!(verify_capsule_signature(capsule, &envelope, &other_public_key).is_err());
     }
@@ -236,7 +238,10 @@ mod tests {
 
         assert!(sign_capsule(b"capsule", "not a private key").is_err());
         assert!(verify_capsule_signature(b"capsule", &envelope, "not a public key").is_err());
-        assert!(verify_capsule_signature_with_public_key_bytes(b"capsule", &envelope, &[0; 31]).is_err());
+        assert!(
+            verify_capsule_signature_with_public_key_bytes(b"capsule", &envelope, &[0; 31])
+                .is_err()
+        );
         verify_capsule_signature(b"capsule", &envelope, &public_key).unwrap();
     }
 }
