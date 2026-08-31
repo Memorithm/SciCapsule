@@ -1,0 +1,159 @@
+schema_version: 1
+kind: scicapsule_ecosystem_agent_roadmap
+status: active
+last_updated: "2026-08-31"
+repository: Memorithm/SciCapsule
+intended_consumer: autonomous_coding_agent
+merge_policy: never_merge_this_file_to_default_branch_unless_user_explicitly_requests
+
+mission:
+  primary: >-
+    Evolve SciCapsule as the independently distributable product for portable,
+    reproducible, integrity-checked and explicitly trusted execution capsules,
+    while preserving the canonical low-level scicap schema boundary owned in the
+    SciRust monorepo.
+  ecosystem_goal: >-
+    Provide the portable artifact and bounded execution layer used by SciRust Hub
+    and other ecosystem products without absorbing their orchestration, scientific,
+    verification-verdict, optimization, or adaptive-runtime semantics.
+
+verified_current_facts:
+  - canonical_scicap_schema_and_deterministic_container_primitives_live_in_Memorithm_scirust
+  - SciCapsule_provides_pack_inspect_verify_extract_sign_verify_signature_verify_trusted_and_run_product_surfaces
+  - detached_signatures_use_explicit_external_key_material_and_do_not_modify_canonical_scicap_bytes
+  - trust_policy_is_explicit_and_local_and_supports_threshold_distinct_signers
+  - trusted_run_uses_no_shell_interpolation_and_bounded_process_lifecycle_on_Unix
+  - current_execution_is_not_an_OS_sandbox
+  - non_Unix_execution_fails_closed_for_current_bounded_execution_guarantees
+  - a_versioned_SciRust_Hub_process_contract_exists_and_pins_verified_inputs_before_execution
+
+invariants:
+  - canonical_scicap_bytes_are_not_silently_mutated_by_trust_provenance_or_orchestration_metadata
+  - integrity_is_not_equated_with_authenticity
+  - authenticity_is_not_equated_with_local_trust_authorization
+  - trusted_execution_is_not_equated_with_OS_sandboxing
+  - no_shell_interpolation_for_capsule_entrypoint_execution
+  - explicit_resource_limits_fail_closed
+  - result_artifacts_must_describe_the_same_pinned_bytes_that_were_authorized_for_execution
+  - unknown_future_contract_or_schema_shapes_fail_closed
+  - required_CI_must_be_green_on_exact_PR_head_before_merge
+
+ownership:
+  role: portable_capsule_product_trust_and_bounded_execution_layer
+  owns:
+    - user_facing_pack_inspect_verify_extract_sign_and_trust_policy_CLI
+    - detached_signature_and_local_trust_policy_product_contracts
+    - safe_materialization_and_bounded_entrypoint_execution_product_behavior
+    - Hub_facing_capsule_execution_adapter_contract
+    - provenance_sidecar_product_surfaces_that_do_not_mutate_canonical_capsule_bytes
+  does_not_own:
+    - canonical_scicap_schema_primitives_owned_in_SciRust
+    - Hub_global_orchestration_registry_or_artifact_control_plane
+    - SciRust_Verify_evidence_dossier_claim_or_verdict_semantics
+    - ElasticXxx_resource_adaptation_semantics
+    - Forge_candidate_search
+    - specialized_runtime_or_scientific_component_semantics
+
+ecosystem_interfaces:
+  Memorithm/scirust:
+    relationship: canonical_schema_and_low_level_primitive_provider
+    status: active
+    rule: SciCapsule_must_validate_against_shared_schema_changes_without_forking_the_format
+  Memorithm/scirust-hub:
+    relationship: active_published_process_contract
+    status: active
+    rule: Hub_owns_outer_orchestration_and_artifacts_while_SciCapsule_owns_capsule_validation_trust_and_bounded_execution
+  Memorithm/SciRust-Verify:
+    relationship: evidence_and_verdict_partner
+    status: planned_versioned_integration
+    desired_contract:
+      - Verify_may_treat_capsule_identity_signatures_policy_and_execution_result_as_evidence
+      - SciCapsule_does_not_decide_general_verification_claims
+  Memorithm/ElasticXxx:
+    relationship: optional_replayable_plan_or_input_packaging
+    status: planned_not_assumed
+  Memorithm/forge:
+    relationship: optional_candidate_harness_or_artifact_packaging
+    status: planned_not_assumed
+  Memorithm/nonlocal-relativity-v2:
+    relationship: optional_reproducible_experiment_packaging
+    status: planned_not_assumed
+  Memorithm/SLHAv2:
+    relationship: optional_real_model_benchmark_input_or_adapter_packaging
+    status: planned_not_assumed
+  Memorithm/FLAT-ATTENTION:
+    relationship: optional_benchmark_or_kernel_evidence_packaging
+    status: planned_not_assumed
+  Memorithm/NVIDIA-Native-Inference-Stack:
+    relationship: optional_model_runtime_test_artifact_packaging
+    status: planned_not_assumed
+
+roadmap:
+  - id: CAP0
+    name: Canonical boundary and product contract audit
+    status: active
+    goals:
+      - continuously_verify_SciRust_schema_compatibility
+      - keep_product_metadata_outside_canonical_scicap_bytes
+      - version_all_sidecar_and_Hub_contracts_explicitly
+  - id: CAP1
+    name: Execution isolation boundary
+    status: active_priority
+    goals:
+      - define_an_optional_external_sandbox_backend_contract
+      - preserve_current_bounded_process_runner_as_honestly_non_sandboxed
+      - support_fail_closed_policy_when_a_capsule_requires_isolation_unavailable_on_the_host
+      - keep_portable_capsule_format_independent_of_any_one_sandbox_technology
+  - id: CAP2
+    name: Stronger trust and signing operations
+    status: active
+    goals:
+      - harden_key_identity_rotation_and_policy_migration_semantics
+      - preserve_threshold_distinct_signer_rules
+      - add_machine_readable_trust_decision_evidence
+      - never_embed_private_keys_or_implicit_trust_anchors_in_capsules
+  - id: CAP3
+    name: Reproducible execution evidence
+    status: planned
+    goals:
+      - emit_versioned_execution_result_and_environment_scope
+      - integrate_with_SciRust_Verify_without_reimplementing_verdict_semantics
+      - retain_exact_capsule_policy_signature_and_request_identity
+  - id: CAP4
+    name: Hub contract hardening
+    status: active
+    goals:
+      - preserve_existing_v1_contract_compatibility
+      - add_compatibility_tests_on_both_repositories_for_future_versions
+      - keep_TOCTOU_resistance_by_pinning_authorized_bytes
+      - document_failure_and_retry_semantics_for_side_effecting_capsules
+  - id: CAP5
+    name: Ecosystem packaging profiles
+    status: planned_after_CAP3
+    goals:
+      - define_optional_profiles_for_scientific_experiments_verification_runs_Elastic_plans_Forge_campaign_inputs_and_specialized_runtime_benchmarks
+      - profiles_must_not_change_the_core_capsule_schema_without_a_real_shared_schema_need
+  - id: CAP6
+    name: Stable productization
+    status: long_term
+    goals:
+      - semver_MSRV_and_schema_compatibility_policy
+      - documented_cross_platform_execution_guarantees
+      - external_sandbox_integration_matrix
+      - stable_Hub_and_Verify_contracts
+
+agent_operating_protocol:
+  must_read_this_file:
+    - at_start_of_every_agent_session
+    - before_schema_trust_signature_execution_or_Hub_contract_changes
+    - before_cross_repository_packaging_work
+    - before_merge_decisions
+  must_update_this_file:
+    - schema_or_sidecar_contract_change
+    - trust_model_or_execution_boundary_change
+    - Hub_or_Verify_contract_change
+    - roadmap_phase_change
+  fail_closed: >-
+    If this roadmap cannot be read, do not make major schema-boundary, trust,
+    execution, cross-repository contract, or merge decisions. Read-only diagnosis
+    is allowed.
