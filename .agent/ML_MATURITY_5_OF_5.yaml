@@ -1,0 +1,55 @@
+schema_version: 1
+kind: memorithm_ml_maturity_program
+status: active
+last_updated: "2026-08-31"
+repository: Memorithm/SciCapsule
+objective: >-
+  Raise portable ML artifact and reproducible execution packaging to 5/5 while
+  preserving SciCapsule's ownership of capsule integrity/trust/execution and
+  keeping model semantics in SciRust/NNIS and verdict semantics in Verify.
+score_policy:
+  five_of_five_requires:
+    - canonical_bounded_packaging_of_real_model_workloads
+    - immutable_identity_for_model_config_tokenizer_weights_data_manifest_and_outputs
+    - signatures_and_trust_policy_separate_from_content_semantics
+    - reproducible_execution_request_and_result_contract
+    - exact_head_required_CI_green
+  forbidden:
+    - calling_process_supervision_a_sandbox
+    - embedding_model_runtime_logic_into_capsule_format
+    - treating_signed_content_as_scientifically_correct
+priority_program:
+  - id: CML0
+    name: Large ML artifact packaging
+    priority: P0
+    goals:
+      - qualify_large_Safetensors_shards_tokenizers_configs_dataset_manifests_and_checkpoint_sets
+      - preserve_file_level_hashes_and_aggregate_manifest_identity
+      - avoid_whole_bundle_JSON_or_memory_materialization_requirements
+      - enforce_bounded_file_count_and_bytes_with_clear_failure
+  - id: CML1
+    name: Reproducible ML execution contract
+    priority: P0
+    goals:
+      - version_training_inference_benchmark_and_verification_request_shapes_without_owning_their_semantics
+      - pin_exact_environment_inputs_runtime_component_and_output_paths
+      - preserve_deterministic_result_metadata_without_host_path_or_pid_noise
+  - id: CML2
+    name: Sandbox boundary integration
+    priority: P1
+    goals:
+      - define_explicit_external_sandbox_adapter_contract_for_untrusted_ML_or_generated_code
+      - support_cpu_memory_network_filesystem_and_device_policy_inputs_when_external_boundary_provides_them
+      - fail_closed_when_requested_isolation_cannot_be_established
+  - id: CML3
+    name: Hub and Verify interoperability
+    priority: P0
+    goals:
+      - keep_Hub_outer_orchestration_and_artifact_lineage
+      - let_Verify_ingest_capsule_execution_evidence_without_reinterpreting_trust_as_verdict
+      - bind_execution_result_to_exact_capsule_policy_signatures_and_runtime_component_identity
+completion_definition: >-
+  SciCapsule is 5/5 for ML when large real model workloads and their immutable
+  dependencies can be packaged, trusted, executed through explicit bounded or
+  sandboxed contracts, reproduced via Hub and verified via SciRust-Verify without
+  semantic ownership leakage.
