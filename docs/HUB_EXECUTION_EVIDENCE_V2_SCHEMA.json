@@ -1,0 +1,31 @@
+{
+  "schema_version": 2,
+  "contract": "capsule.execute@2.0.0",
+  "media_type": "application/vnd.scicapsule.hub-run-result.v2+json",
+  "status": "succeeded",
+  "capsule_sha256": "<sha256>",
+  "policy_sha256": "<sha256>",
+  "request_sha256": "<sha256>",
+  "signature_envelope_sha256": ["<sha256>"],
+  "capsule_name": "<manifest-name>",
+  "entrypoint": "<manifest-entrypoint>",
+  "matched_signers": ["<trusted-key-id>"],
+  "required_signatures": 1,
+  "runtime": {
+    "launcher_sha256": "<sha256>",
+    "scicapsule_sha256": "<sha256>",
+    "package_version": "0.1.0"
+  },
+  "environment_scope": {
+    "os": "linux",
+    "arch": "aarch64",
+    "execution_mode": "bounded_process_unix",
+    "sandbox": "none"
+  },
+  "source_result": {
+    "schema_version": 1,
+    "media_type": "application/vnd.scicapsule.hub-run-result.v1+json",
+    "sha256": "<sha256>"
+  },
+  "trust_is_scientific_verdict": false
+}
