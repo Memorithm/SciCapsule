@@ -28,5 +28,9 @@ path = "src/lib.rs"
 name = "scicapsule"
 path = "src/product_main.rs"
 
+[[bin]]
+name = "scicapsule-hub-evidence-v2"
+path = "src/hub_evidence_v2.rs"
+
 [lints.rust]
 unsafe_code = "deny"
