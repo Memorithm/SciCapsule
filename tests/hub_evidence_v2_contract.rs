@@ -19,9 +19,14 @@ fn hub_evidence_v2_binary_rejects_relative_runtime_path_before_execution() {
 
     std::fs::write(&capsule, b"not-a-capsule").expect("capsule fixture");
     std::fs::write(&policy, b"{}").expect("policy fixture");
+    let request_fixture = serde_json::json!({
+        "schema_version": 1,
+        "signatures": [{"version": 1}],
+        "max_bytes": 1024
+    });
     std::fs::write(
         &request,
-        br#"{"schema_version":1,"signatures":[{"version":1}],"max_bytes":1024}"#,
+        serde_json::to_vec(&request_fixture).expect("encode request fixture"),
     )
     .expect("request fixture");
 
@@ -43,5 +48,7 @@ fn hub_evidence_v2_binary_rejects_relative_runtime_path_before_execution() {
         .expect("run v2 binary");
 
     assert!(!output.status.success());
+    let stderr = String::from_utf8(output.stderr).expect("stderr utf8");
+    assert!(stderr.contains("--scicapsule-program must be an absolute path"));
     assert!(!result.exists());
 }
