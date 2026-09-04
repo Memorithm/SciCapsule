@@ -427,13 +427,14 @@ fn hash_regular_bounded(path: &Path, max_bytes: u64, label: &str) -> Result<Stri
     if metadata.len() > max_bytes {
         return Err(format!("{label} exceeds {max_bytes} bytes"));
     }
-    let mut input = File::open(path)
+    let input = File::open(path)
         .map_err(|error| format!("cannot open {label} {}: {error}", path.display()))?;
     let mut hasher = Sha256::new();
     let mut total = 0u64;
     let mut buffer = [0u8; 64 * 1024];
+    let mut reader = input;
     loop {
-        let read = input
+        let read = reader
             .read(&mut buffer)
             .map_err(|error| format!("cannot read {label}: {error}"))?;
         if read == 0 {
