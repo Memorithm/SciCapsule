@@ -1,4 +1,3 @@
-use std::path::Path;
 use std::process::Command;
 
 #[test]
@@ -44,5 +43,5 @@ fn hub_evidence_v2_binary_rejects_relative_runtime_path_before_execution() {
         .expect("run v2 binary");
 
     assert!(!output.status.success());
-    assert!(!Path::new(&result).exists());
+    assert!(!result.exists());
 }
