@@ -252,7 +252,8 @@ fn execute(cli: Cli) -> Result<String, String> {
     }
     if source.capsule_sha256 != capsule_sha256 {
         return Err(
-            "SciCapsule v1 result capsule identity disagrees with the v2 pinned snapshot".to_owned(),
+            "SciCapsule v1 result capsule identity disagrees with the v2 pinned snapshot"
+                .to_owned(),
         );
     }
 
@@ -335,9 +336,15 @@ fn sibling_scicapsule(launcher: &Path) -> Result<PathBuf, String> {
 
 fn ensure_absent(path: &Path, label: &str) -> Result<(), String> {
     match fs::symlink_metadata(path) {
-        Ok(_) => Err(format!("refusing to overwrite existing {label}: {}", path.display())),
+        Ok(_) => Err(format!(
+            "refusing to overwrite existing {label}: {}",
+            path.display()
+        )),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(error) => Err(format!("cannot inspect {label} {}: {error}", path.display())),
+        Err(error) => Err(format!(
+            "cannot inspect {label} {}: {error}",
+            path.display()
+        )),
     }
 }
 
