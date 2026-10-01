@@ -15,10 +15,11 @@ jobs:
     env:
       CARGO_INCREMENTAL: 0
       TMPDIR: ${{ github.workspace }}/target/tmp
+      RUSTUP_HOME: ${{ github.workspace }}/target/rustup-home
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
-      - name: Prepare writable temporary directory
-        run: mkdir -p "$TMPDIR"
+      - name: Prepare writable toolchain and temporary directories
+        run: mkdir -p "$TMPDIR" "$RUSTUP_HOME"
       - uses: dtolnay/rust-toolchain@fa04a1451ff1842e2626ccb99004d0195b455a88
         with:
           toolchain: stable
