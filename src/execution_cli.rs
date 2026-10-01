@@ -400,11 +400,15 @@ fn receive_capture_until(
         Ok(outcome) => outcome,
         Err(mpsc::RecvTimeoutError::Timeout) => CaptureOutcome {
             bytes: Vec::new(),
-            error: Some(format!("{label} capture drain exceeded its 1 second deadline")),
+            error: Some(format!(
+                "{label} capture drain exceeded its 1 second deadline"
+            )),
         },
         Err(mpsc::RecvTimeoutError::Disconnected) => CaptureOutcome {
             bytes: Vec::new(),
-            error: Some(format!("{label} capture thread terminated without a result")),
+            error: Some(format!(
+                "{label} capture thread terminated without a result"
+            )),
         },
     }
 }
