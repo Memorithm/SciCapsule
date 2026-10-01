@@ -20,6 +20,7 @@ use std::io::Read;
 use std::path::Path;
 use std::path::PathBuf;
 use std::process::{Command, ExitStatus, Stdio};
+use std::sync::mpsc;
 #[cfg(unix)]
 use std::sync::Mutex;
 use std::thread;
@@ -30,6 +31,7 @@ const DEFAULT_TIMEOUT_SECONDS: u64 = 300;
 const MAX_TIMEOUT_SECONDS: u64 = 86_400;
 const DEFAULT_MAX_OUTPUT_BYTES: u64 = 16 * 1024 * 1024;
 const MAX_OUTPUT_BYTES: u64 = 64 * 1024 * 1024;
+const OUTPUT_DRAIN_TIMEOUT: Duration = Duration::from_secs(1);
 const MAX_ENVIRONMENT_ENTRIES: usize = 128;
 const MAX_ENVIRONMENT_BYTES: usize = 64 * 1024;
 const MAX_ARGUMENTS: usize = 256;
@@ -373,11 +375,38 @@ fn capture_stream<R: Read>(
     CaptureOutcome { bytes, error: None }
 }
 
-fn join_capture(handle: thread::JoinHandle<CaptureOutcome>, label: &'static str) -> CaptureOutcome {
-    handle.join().unwrap_or_else(|_| CaptureOutcome {
-        bytes: Vec::new(),
-        error: Some(format!("{label} capture thread panicked")),
-    })
+fn spawn_capture<R>(
+    reader: R,
+    maximum_bytes: u64,
+    label: &'static str,
+) -> mpsc::Receiver<CaptureOutcome>
+where
+    R: Read + Send + 'static,
+{
+    let (sender, receiver) = mpsc::channel();
+    thread::spawn(move || {
+        let _ = sender.send(capture_stream(reader, maximum_bytes, label));
+    });
+    receiver
+}
+
+fn receive_capture_until(
+    receiver: mpsc::Receiver<CaptureOutcome>,
+    label: &'static str,
+    deadline: Instant,
+) -> CaptureOutcome {
+    let remaining = deadline.saturating_duration_since(Instant::now());
+    match receiver.recv_timeout(remaining) {
+        Ok(outcome) => outcome,
+        Err(mpsc::RecvTimeoutError::Timeout) => CaptureOutcome {
+            bytes: Vec::new(),
+            error: Some(format!("{label} capture drain exceeded its 1 second deadline")),
+        },
+        Err(mpsc::RecvTimeoutError::Disconnected) => CaptureOutcome {
+            bytes: Vec::new(),
+            error: Some(format!("{label} capture thread terminated without a result")),
+        },
+    }
 }
 
 fn result_for(
@@ -535,10 +564,8 @@ fn execute(command: RunCommand) -> Result<String, ProductError> {
         .stderr
         .take()
         .ok_or_else(|| ProductError::operation("cannot capture entrypoint stderr"))?;
-    let stdout_limit = command.max_output_bytes;
-    let stderr_limit = command.max_output_bytes;
-    let stdout_handle = thread::spawn(move || capture_stream(stdout, stdout_limit, "stdout"));
-    let stderr_handle = thread::spawn(move || capture_stream(stderr, stderr_limit, "stderr"));
+    let stdout_receiver = spawn_capture(stdout, command.max_output_bytes, "stdout");
+    let stderr_receiver = spawn_capture(stderr, command.max_output_bytes, "stderr");
 
     let process_group = ProcessGroupGuard(rustix::process::Pid::from_child(&child));
     let deadline = Instant::now()
@@ -555,8 +582,11 @@ fn execute(command: RunCommand) -> Result<String, ProductError> {
                 match child.wait() {
                     Ok(status) => break status,
                     Err(error) => {
-                        let _ = join_capture(stdout_handle, "stdout");
-                        let _ = join_capture(stderr_handle, "stderr");
+                        let drain_deadline = Instant::now()
+                            .checked_add(OUTPUT_DRAIN_TIMEOUT)
+                            .unwrap_or_else(Instant::now);
+                        let _ = receive_capture_until(stdout_receiver, "stdout", drain_deadline);
+                        let _ = receive_capture_until(stderr_receiver, "stderr", drain_deadline);
                         return Err(ProductError::operation(format!(
                             "cannot reap timed-out capsule entrypoint: {error}"
                         )));
@@ -567,8 +597,11 @@ fn execute(command: RunCommand) -> Result<String, ProductError> {
             Err(error) => {
                 process_group.kill();
                 let _ = child.wait();
-                let _ = join_capture(stdout_handle, "stdout");
-                let _ = join_capture(stderr_handle, "stderr");
+                let drain_deadline = Instant::now()
+                    .checked_add(OUTPUT_DRAIN_TIMEOUT)
+                    .unwrap_or_else(Instant::now);
+                let _ = receive_capture_until(stdout_receiver, "stdout", drain_deadline);
+                let _ = receive_capture_until(stderr_receiver, "stderr", drain_deadline);
                 return Err(ProductError::operation(format!(
                     "cannot wait for capsule entrypoint: {error}"
                 )));
@@ -576,8 +609,16 @@ fn execute(command: RunCommand) -> Result<String, ProductError> {
         }
     };
 
-    let stdout = join_capture(stdout_handle, "stdout");
-    let stderr = join_capture(stderr_handle, "stderr");
+    // The initial child may exit while a descendant still owns a cloned pipe.
+    // Kill the dedicated group before draining so such descendants cannot keep
+    // stdout or stderr open indefinitely, then bound both drains by one shared
+    // deadline independent of the entrypoint wall-clock deadline.
+    process_group.kill();
+    let drain_deadline = Instant::now()
+        .checked_add(OUTPUT_DRAIN_TIMEOUT)
+        .unwrap_or_else(Instant::now);
+    let stdout = receive_capture_until(stdout_receiver, "stdout", drain_deadline);
+    let stderr = receive_capture_until(stderr_receiver, "stderr", drain_deadline);
     let capture_failed = stdout.error.is_some() || stderr.error.is_some();
 
     let status_name = if timed_out {
@@ -814,6 +855,37 @@ mod tests {
         assert_eq!(
             Base64::decode_vec(value["stdout_base64"].as_str().unwrap()).unwrap(),
             b"before-timeout"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn parent_exit_kills_pipe_holding_descendant_and_bounds_capture_drain() {
+        let (_dir, capsule, signature, policy) = trusted_fixture(
+            b"#!/bin/sh\n(trap '' HUP; /bin/sleep 4) &\nprintf 'parent-done\\n'\nexit 0\n",
+            87,
+        );
+        let started = Instant::now();
+        let result = run(&[
+            "run".to_owned(),
+            capsule.display().to_string(),
+            "--policy".to_owned(),
+            policy.display().to_string(),
+            "--signature".to_owned(),
+            signature.display().to_string(),
+            "--timeout-seconds".to_owned(),
+            "5".to_owned(),
+        ])
+        .unwrap();
+        assert!(
+            started.elapsed() < Duration::from_secs(3),
+            "capture drain waited for a descendant-held pipe"
+        );
+        let value: serde_json::Value = serde_json::from_str(&result).unwrap();
+        assert_eq!(value["status"], "success");
+        assert_eq!(
+            Base64::decode_vec(value["stdout_base64"].as_str().unwrap()).unwrap(),
+            b"parent-done\n"
         );
     }
 
