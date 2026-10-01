@@ -73,9 +73,16 @@ The default wall-clock timeout is 300 seconds. The caller may select a positive
 value up to 86400 seconds.
 
 The entrypoint is launched in a dedicated Unix process group. On timeout the
-whole group is killed, not only the initial child. A process-group cleanup guard
-also runs on other command exits, so descendants are not permitted to outlive
-the SciCapsule `run` invocation.
+whole group is killed, not only the initial child. The group is also killed
+immediately after the initial child exits, before output capture is drained, so
+a descendant retaining a cloned stdout or stderr pipe cannot keep the runner
+alive. Both capture drains share a separate one-second deadline; drain timeout
+is reported as a structured capture error. A process-group cleanup guard still
+runs on all other command exits.
+
+These lifecycle controls apply to descendants that remain in the dedicated
+process group. They do not establish an OS sandbox and cannot prevent hostile
+code from attempting to escape process supervision through host facilities.
 
 The existing extraction limits remain independently configurable with
 `--max-files` and `--max-bytes`.
