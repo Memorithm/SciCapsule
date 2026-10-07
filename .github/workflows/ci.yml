@@ -10,7 +10,9 @@ permissions:
 
 jobs:
   quality-and-msrv:
-    runs-on: [self-hosted, Linux, ARM64, scirust-arm64, jetson-thor, internal]
+    # Pull requests always run on a fresh GitHub-hosted ARM64 VM. The persistent
+    # internal Thor runner is reserved for code already merged into main.
+    runs-on: ${{ fromJSON(github.event_name == 'pull_request' && '["ubuntu-24.04-arm"]' || '["self-hosted","Linux","ARM64","scirust-arm64","jetson-thor","internal"]') }}
     timeout-minutes: 15
     env:
       CARGO_INCREMENTAL: 0
@@ -19,6 +21,8 @@ jobs:
       RUSTUP_HOME: ${{ github.workspace }}/target/rustup-home
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          persist-credentials: false
       - name: Prepare writable toolchain and temporary directories
         run: mkdir -p "$CARGO_HOME" "$TMPDIR" "$RUSTUP_HOME"
       - uses: dtolnay/rust-toolchain@fa04a1451ff1842e2626ccb99004d0195b455a88
