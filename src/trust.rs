@@ -3,10 +3,13 @@ use crate::signature::{
 };
 use ed25519_dalek::{pkcs8::DecodePublicKey, Signature, VerifyingKey};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::collections::BTreeSet;
 use std::fmt;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 pub const TRUST_POLICY_VERSION: u32 = 1;
+pub const TRUST_POLICY_LIFECYCLE_VERSION: u32 = 2;
 pub const MAX_TRUSTED_KEYS: usize = 64;
 pub const MAX_SIGNATURES: usize = 64;
 const MAX_KEY_NAME_BYTES: usize = 64;
@@ -20,9 +23,29 @@ pub struct TrustedKey {
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct RevokedKey {
+    pub public_key_sha256: String,
+    pub revoked_at_unix_seconds: u64,
+    pub reason: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct TrustPolicy {
     pub version: u32,
     pub algorithm: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub policy_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub revision: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub previous_policy_sha256: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub valid_from_unix_seconds: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub valid_until_unix_seconds: Option<u64>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub revoked_keys: Vec<RevokedKey>,
     pub minimum_signatures: u32,
     pub trusted_keys: Vec<TrustedKey>,
 }
@@ -31,6 +54,10 @@ pub struct TrustPolicy {
 pub struct TrustDecision {
     pub required_signatures: u32,
     pub matched_signers: Vec<String>,
+    pub policy_digest: String,
+    pub policy_version: u32,
+    pub policy_id: Option<String>,
+    pub policy_revision: Option<u64>,
 }
 
 impl TrustPolicy {
@@ -69,6 +96,12 @@ impl TrustPolicy {
         let policy = Self {
             version: TRUST_POLICY_VERSION,
             algorithm: SIGNATURE_ALGORITHM.to_owned(),
+            policy_id: None,
+            revision: None,
+            previous_policy_sha256: None,
+            valid_from_unix_seconds: None,
+            valid_until_unix_seconds: None,
+            revoked_keys: Vec::new(),
             minimum_signatures,
             trusted_keys,
         };
@@ -76,16 +109,141 @@ impl TrustPolicy {
         Ok(policy)
     }
 
+    pub fn from_named_pem_keys_v2(
+        policy_id: String,
+        valid_from_unix_seconds: u64,
+        valid_until_unix_seconds: u64,
+        minimum_signatures: u32,
+        keys: Vec<(String, String)>,
+    ) -> Result<Self, TrustPolicyError> {
+        let legacy = Self::from_named_pem_keys(minimum_signatures, keys)?;
+        let policy = Self {
+            version: TRUST_POLICY_LIFECYCLE_VERSION,
+            algorithm: legacy.algorithm,
+            policy_id: Some(policy_id),
+            revision: Some(1),
+            previous_policy_sha256: None,
+            valid_from_unix_seconds: Some(valid_from_unix_seconds),
+            valid_until_unix_seconds: Some(valid_until_unix_seconds),
+            revoked_keys: Vec::new(),
+            minimum_signatures,
+            trusted_keys: legacy.trusted_keys,
+        };
+        policy.validate()?;
+        Ok(policy)
+    }
+
+    pub fn update_from_named_pem_keys(
+        &self,
+        expected_current_digest: &str,
+        valid_from_unix_seconds: u64,
+        valid_until_unix_seconds: u64,
+        minimum_signatures: u32,
+        keys: Vec<(String, String)>,
+        revoked_names: &[String],
+    ) -> Result<Self, TrustPolicyError> {
+        self.validate()?;
+        if self.version != TRUST_POLICY_LIFECYCLE_VERSION {
+            return Err(TrustPolicyError::new(
+                "controlled updates require a lifecycle trust policy v2",
+            ));
+        }
+        let current_digest = self.policy_digest()?;
+        if expected_current_digest != current_digest {
+            return Err(TrustPolicyError::new(format!(
+                "current policy digest mismatch: expected {expected_current_digest:?}, actual {current_digest:?}"
+            )));
+        }
+        let current_valid_from = self
+            .valid_from_unix_seconds
+            .expect("validated v2 valid_from");
+        if valid_from_unix_seconds < current_valid_from {
+            return Err(TrustPolicyError::new(format!(
+                "successor valid_from_unix_seconds {valid_from_unix_seconds} precedes current policy start {current_valid_from}"
+            )));
+        }
+        let mut next = Self::from_named_pem_keys_v2(
+            self.policy_id.clone().expect("validated v2 policy id"),
+            valid_from_unix_seconds,
+            valid_until_unix_seconds,
+            minimum_signatures,
+            keys,
+        )?;
+        next.revision = Some(
+            self.revision
+                .expect("validated v2 revision")
+                .checked_add(1)
+                .ok_or_else(|| TrustPolicyError::new("policy revision overflow"))?,
+        );
+        next.previous_policy_sha256 = Some(current_digest);
+        next.revoked_keys = self.revoked_keys.clone();
+
+        let mut names = BTreeSet::new();
+        for name in revoked_names {
+            if !names.insert(name) {
+                return Err(TrustPolicyError::new(format!(
+                    "duplicate revoked key name {name:?}"
+                )));
+            }
+            let key = self
+                .trusted_keys
+                .iter()
+                .find(|key| key.name == *name)
+                .ok_or_else(|| {
+                    TrustPolicyError::new(format!("cannot revoke unknown key {name:?}"))
+                })?;
+            let fingerprint = public_key_digest(&key.public_key);
+            if !next
+                .revoked_keys
+                .iter()
+                .any(|revoked| revoked.public_key_sha256 == fingerprint)
+            {
+                next.revoked_keys.push(RevokedKey {
+                    public_key_sha256: fingerprint,
+                    revoked_at_unix_seconds: valid_from_unix_seconds,
+                    reason: "controlled policy update".to_owned(),
+                });
+            }
+        }
+        next.validate()?;
+        Ok(next)
+    }
+
+    pub fn policy_digest(&self) -> Result<String, TrustPolicyError> {
+        Ok(sha256_digest(&self.to_json()?))
+    }
+
+    pub fn enforces_lifecycle(&self) -> bool {
+        self.version == TRUST_POLICY_LIFECYCLE_VERSION
+    }
+
     pub fn verify(
         &self,
         capsule_bytes: &[u8],
         signatures: &[SignatureEnvelope],
     ) -> Result<TrustDecision, TrustPolicyError> {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_err(|_| TrustPolicyError::new("system clock is before Unix epoch"))?
+            .as_secs();
+        self.verify_at_unix_seconds(capsule_bytes, signatures, now)
+    }
+
+    pub fn verify_at_unix_seconds(
+        &self,
+        capsule_bytes: &[u8],
+        signatures: &[SignatureEnvelope],
+        now_unix_seconds: u64,
+    ) -> Result<TrustDecision, TrustPolicyError> {
         self.validate()?;
+        self.validate_at_unix_seconds(now_unix_seconds)?;
         validate_signature_count(signatures.len())?;
 
         let mut matched_signers = Vec::new();
         for trusted_key in &self.trusted_keys {
+            if self.key_is_revoked(trusted_key, now_unix_seconds) {
+                continue;
+            }
             let matched = signatures.iter().any(|signature| {
                 verify_capsule_signature_with_public_key_bytes(
                     capsule_bytes,
@@ -112,6 +270,11 @@ impl TrustPolicy {
         signatures: &[Vec<u8>],
     ) -> Result<TrustDecision, TrustPolicyError> {
         self.validate()?;
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_err(|_| TrustPolicyError::new("system clock is before Unix epoch"))?
+            .as_secs();
+        self.validate_at_unix_seconds(now)?;
         validate_signature_count(signatures.len())?;
         for signature in signatures {
             if signature.len() != ed25519_dalek::SIGNATURE_LENGTH {
@@ -125,6 +288,9 @@ impl TrustPolicy {
 
         let mut matched_signers = Vec::new();
         for trusted_key in &self.trusted_keys {
+            if self.key_is_revoked(trusted_key, now) {
+                continue;
+            }
             let key_bytes: [u8; ed25519_dalek::PUBLIC_KEY_LENGTH] =
                 trusted_key.public_key.as_slice().try_into().map_err(|_| {
                     TrustPolicyError::new("invalid trusted Ed25519 public key length")
@@ -164,15 +330,121 @@ impl TrustPolicy {
         Ok(TrustDecision {
             required_signatures: self.minimum_signatures,
             matched_signers,
+            policy_digest: self.policy_digest()?,
+            policy_version: self.version,
+            policy_id: self.policy_id.clone(),
+            policy_revision: self.revision,
+        })
+    }
+
+    fn validate_at_unix_seconds(&self, now: u64) -> Result<(), TrustPolicyError> {
+        if self.version == TRUST_POLICY_LIFECYCLE_VERSION {
+            let from = self
+                .valid_from_unix_seconds
+                .expect("validated v2 valid_from");
+            let until = self
+                .valid_until_unix_seconds
+                .expect("validated v2 valid_until");
+            if now < from {
+                return Err(TrustPolicyError::new(format!(
+                    "trust policy is not valid before {from}; current time is {now}"
+                )));
+            }
+            if now >= until {
+                return Err(TrustPolicyError::new(format!(
+                    "trust policy expired at {until}; current time is {now}"
+                )));
+            }
+            let active = self
+                .trusted_keys
+                .iter()
+                .filter(|key| !self.key_is_revoked(key, now))
+                .count();
+            if active < self.minimum_signatures as usize {
+                return Err(TrustPolicyError::new(format!(
+                    "trust threshold cannot be met: {active} unrevoked key(s), require {}",
+                    self.minimum_signatures
+                )));
+            }
+        }
+        Ok(())
+    }
+
+    fn key_is_revoked(&self, key: &TrustedKey, now: u64) -> bool {
+        let fingerprint = public_key_digest(&key.public_key);
+        self.revoked_keys.iter().any(|revoked| {
+            revoked.public_key_sha256 == fingerprint && revoked.revoked_at_unix_seconds <= now
         })
     }
 
     fn validate(&self) -> Result<(), TrustPolicyError> {
-        if self.version != TRUST_POLICY_VERSION {
+        if !matches!(
+            self.version,
+            TRUST_POLICY_VERSION | TRUST_POLICY_LIFECYCLE_VERSION
+        ) {
             return Err(TrustPolicyError::new(format!(
-                "unsupported trust policy version {}; expected {}",
-                self.version, TRUST_POLICY_VERSION
+                "unsupported trust policy version {}; expected {} or {}",
+                self.version, TRUST_POLICY_VERSION, TRUST_POLICY_LIFECYCLE_VERSION
             )));
+        }
+        match self.version {
+            TRUST_POLICY_VERSION => {
+                if self.policy_id.is_some()
+                    || self.revision.is_some()
+                    || self.previous_policy_sha256.is_some()
+                    || self.valid_from_unix_seconds.is_some()
+                    || self.valid_until_unix_seconds.is_some()
+                    || !self.revoked_keys.is_empty()
+                {
+                    return Err(TrustPolicyError::new(
+                        "trust policy v1 must not contain lifecycle fields",
+                    ));
+                }
+            }
+            TRUST_POLICY_LIFECYCLE_VERSION => {
+                let policy_id = self
+                    .policy_id
+                    .as_deref()
+                    .ok_or_else(|| TrustPolicyError::new("trust policy v2 requires policy_id"))?;
+                validate_key_name(policy_id)?;
+                let revision = self
+                    .revision
+                    .ok_or_else(|| TrustPolicyError::new("trust policy v2 requires revision"))?;
+                if revision == 0 {
+                    return Err(TrustPolicyError::new("policy revision must be at least 1"));
+                }
+                match (&self.previous_policy_sha256, revision) {
+                    (None, 1) => {}
+                    (Some(digest), revision) if revision > 1 => validate_digest(digest)?,
+                    _ => return Err(TrustPolicyError::new(
+                        "revision 1 must not have a previous digest; later revisions must have one",
+                    )),
+                }
+                let from = self.valid_from_unix_seconds.ok_or_else(|| {
+                    TrustPolicyError::new("trust policy v2 requires valid_from_unix_seconds")
+                })?;
+                let until = self.valid_until_unix_seconds.ok_or_else(|| {
+                    TrustPolicyError::new("trust policy v2 requires valid_until_unix_seconds")
+                })?;
+                if from >= until {
+                    return Err(TrustPolicyError::new(
+                        "valid_from_unix_seconds must be before valid_until_unix_seconds",
+                    ));
+                }
+                let mut revoked = BTreeSet::new();
+                for entry in &self.revoked_keys {
+                    validate_digest(&entry.public_key_sha256)?;
+                    if entry.reason.is_empty() || entry.reason.len() > 256 {
+                        return Err(TrustPolicyError::new(
+                            "revocation reason must contain 1..256 bytes",
+                        ));
+                    }
+                    if !revoked.insert(entry.public_key_sha256.clone()) {
+                        return Err(TrustPolicyError::new("duplicate revoked key fingerprint"));
+                    }
+                }
+            }
+            _ => unreachable!(),
         }
         if self.algorithm != SIGNATURE_ALGORITHM {
             return Err(TrustPolicyError::new(format!(
@@ -242,6 +514,37 @@ impl TrustPolicy {
         }
         Ok(())
     }
+}
+
+fn sha256_digest(bytes: &[u8]) -> String {
+    let digest = Sha256::digest(bytes);
+    let mut encoded = String::with_capacity(71);
+    encoded.push_str("sha256:");
+    for byte in digest {
+        use std::fmt::Write as _;
+        write!(&mut encoded, "{byte:02x}").expect("write to string");
+    }
+    encoded
+}
+
+fn public_key_digest(bytes: &[u8]) -> String {
+    sha256_digest(bytes)
+}
+
+fn validate_digest(value: &str) -> Result<(), TrustPolicyError> {
+    let hex = value
+        .strip_prefix("sha256:")
+        .ok_or_else(|| TrustPolicyError::new("digest must use sha256:<64 lowercase hex> form"))?;
+    if hex.len() != 64
+        || !hex
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
+    {
+        return Err(TrustPolicyError::new(
+            "digest must use sha256:<64 lowercase hex> form",
+        ));
+    }
+    Ok(())
 }
 
 fn validate_signature_count(count: usize) -> Result<(), TrustPolicyError> {
@@ -439,5 +742,91 @@ mod tests {
             TrustPolicy::from_named_pem_keys(1, vec![("bad name".to_owned(), public_pem(9))],)
                 .is_err()
         );
+    }
+
+    #[test]
+    fn lifecycle_policy_enforces_validity_and_exposes_digest() {
+        let capsule = b"canonical capsule bytes";
+        let policy = TrustPolicy::from_named_pem_keys_v2(
+            "release".to_owned(),
+            100,
+            200,
+            1,
+            vec![("alpha".to_owned(), public_pem(20))],
+        )
+        .unwrap();
+        let signature = sign_capsule(capsule, &private_pem(20)).unwrap();
+        assert!(policy
+            .verify_at_unix_seconds(capsule, std::slice::from_ref(&signature), 99)
+            .is_err());
+        let decision = policy
+            .verify_at_unix_seconds(capsule, std::slice::from_ref(&signature), 100)
+            .unwrap();
+        assert_eq!(decision.policy_version, TRUST_POLICY_LIFECYCLE_VERSION);
+        assert_eq!(decision.policy_revision, Some(1));
+        assert_eq!(decision.policy_id.as_deref(), Some("release"));
+        assert_eq!(decision.policy_digest, policy.policy_digest().unwrap());
+        assert!(policy
+            .verify_at_unix_seconds(capsule, &[signature], 200)
+            .is_err());
+    }
+
+    #[test]
+    fn controlled_update_links_digest_rejects_rollback_and_revokes_keys() {
+        let capsule = b"canonical capsule bytes";
+        let current = TrustPolicy::from_named_pem_keys_v2(
+            "release".to_owned(),
+            100,
+            200,
+            1,
+            vec![
+                ("alpha".to_owned(), public_pem(21)),
+                ("beta".to_owned(), public_pem(22)),
+            ],
+        )
+        .unwrap();
+        let digest = current.policy_digest().unwrap();
+        assert!(current
+            .update_from_named_pem_keys(
+                "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+                150,
+                300,
+                1,
+                vec![("beta".to_owned(), public_pem(22))],
+                &["alpha".to_owned()],
+            )
+            .is_err());
+        let next = current
+            .update_from_named_pem_keys(
+                &digest,
+                150,
+                300,
+                1,
+                vec![("beta".to_owned(), public_pem(22))],
+                &["alpha".to_owned()],
+            )
+            .unwrap();
+        assert_eq!(next.revision, Some(2));
+        assert_eq!(
+            next.previous_policy_sha256.as_deref(),
+            Some(digest.as_str())
+        );
+        assert_eq!(next.revoked_keys.len(), 1);
+        let alpha = sign_capsule(capsule, &private_pem(21)).unwrap();
+        assert!(next.verify_at_unix_seconds(capsule, &[alpha], 150).is_err());
+        let beta = sign_capsule(capsule, &private_pem(22)).unwrap();
+        assert!(next.verify_at_unix_seconds(capsule, &[beta], 150).is_ok());
+
+        let next_digest = next.policy_digest().unwrap();
+        assert!(next
+            .update_from_named_pem_keys(
+                &next_digest,
+                125,
+                400,
+                1,
+                vec![("alpha".to_owned(), public_pem(21))],
+                &[],
+            )
+            .is_err());
     }
 }

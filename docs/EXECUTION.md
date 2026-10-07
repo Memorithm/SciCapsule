@@ -27,7 +27,8 @@ a valid provenance statement. The order is deliberate:
 
 1. bounded, no-follow capsule read;
 2. canonical `Capsule::decode` integrity verification;
-3. bounded local trust-policy read and validation;
+3. bounded local lifecycle trust-policy v2 read, validity/revocation validation,
+   and canonical policy-digest binding;
 4. bounded detached-signature reads;
 5. trust-policy threshold evaluation over the exact capsule bytes;
 6. private materialization;
@@ -36,6 +37,10 @@ a valid provenance statement. The order is deliberate:
 A signature key is trusted only when it is explicitly configured in the local
 policy. Signature envelopes, provenance metadata, payload bytes, and the
 capsule manifest cannot introduce trust roots.
+
+Legacy policy v1 is never execution authorization. The structured execution
+result includes the exact canonical policy digest and revision that authorized
+the capsule, independently of the detached capsule signatures.
 
 ## Materialization and entrypoint
 

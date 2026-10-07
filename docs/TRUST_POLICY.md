@@ -1,4 +1,4 @@
-# SciCapsule trust policy v1
+# SciCapsule trust policies
 
 ## Scope
 
@@ -9,8 +9,10 @@ The policy answers one question only: how many distinct explicitly configured
 Ed25519 trust anchors must authenticate the exact canonical capsule bytes before
 SciCapsule reports the capsule as trusted under that policy?
 
-It does not assert signer identity, revocation state, timestamp validity,
-provenance, or execution authorization.
+Version 1 is retained for signature inspection and provenance compatibility. It
+does not assert signer identity, revocation state, timestamp validity,
+provenance, or execution authorization. `run` and `hub-run` require lifecycle
+policy version 2 and reject version 1 before materialization or process spawn.
 
 ## Policy format
 
@@ -65,6 +67,47 @@ The output path uses create-new semantics and is never silently overwritten.
 Security-sensitive public-key inputs are size-bounded and, on Unix, opened with
 no-follow semantics.
 
+## Lifecycle policy version 2
+
+Version 2 adds a stable `policy_id`, a strictly positive `revision`, a
+canonical `sha256:<hex>` digest identity, an inclusive `valid_from_unix_seconds`
+and exclusive `valid_until_unix_seconds` window, and a cumulative
+`revoked_keys` list keyed by the SHA-256 digest of raw public-key bytes.
+Revision 1 has no predecessor. Every later revision carries the exact canonical
+digest of its predecessor in `previous_policy_sha256`.
+
+Create revision 1 with explicit UTC Unix-second bounds:
+
+```text
+scicapsule create-lifecycle-policy \
+  --output release-policy-v1.json \
+  --policy-id production-release \
+  --valid-from 1790812800 \
+  --valid-until 1822348800 \
+  --require 2 \
+  release-a=release-a-public.pem release-b=release-b-public.pem
+```
+
+The command prints the canonical policy digest. Create a successor only while
+pinning the exact current digest:
+
+```text
+scicapsule update-trust-policy \
+  --current release-policy-v1.json \
+  --expected-digest sha256:<64-lowercase-hex> \
+  --output release-policy-v2.json \
+  --valid-from 1800000000 --valid-until 1830000000 \
+  --require 1 --revoke release-a \
+  release-b=release-b-public.pem
+```
+
+The update fails if the current digest is stale, the revision cannot advance,
+the predecessor is not version 2, a named revocation is unknown, or the new
+window/threshold/key set is invalid. Revocations are carried forward and cannot
+be silently dropped. Outputs use create-new semantics. Distribution and atomic
+activation of the resulting file remain deployment responsibilities; consumers
+should pin the printed digest and monotonically increasing revision.
+
 ## Evaluating trust
 
 ```text
@@ -97,11 +140,11 @@ metadata cannot add or replace trust anchors.
 
 ## Non-goals
 
-Trust policy v1 deliberately does not define:
+Trust policies deliberately do not define:
 
 - certificates or certificate-authority chains;
 - remote key discovery;
-- revocation or key expiration;
+- remote revocation discovery or certificate revocation;
 - transparency logs;
 - signer identity claims;
 - timestamps or freshness;

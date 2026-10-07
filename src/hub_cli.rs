@@ -19,12 +19,12 @@ use std::path::{Path, PathBuf};
 const HUB_REQUEST_SCHEMA_VERSION: u32 = 1;
 const HUB_RESULT_SCHEMA_VERSION: u32 = 1;
 const HUB_MANIFEST_SCHEMA_VERSION: u16 = 1;
-const HUB_CAPABILITY_CONTRACT_VERSION: &str = "1.0.0";
+const HUB_CAPABILITY_CONTRACT_VERSION: &str = "3.0.0";
 const MAX_HUB_REQUEST_BYTES: u64 = 512 * 1024;
 const MAX_HUB_RESULT_BYTES: usize = 64 * 1024;
 
 const CAPSULE_MEDIA_TYPE: &str = "application/vnd.scirust.scicap";
-const POLICY_MEDIA_TYPE: &str = "application/vnd.scicapsule.trust-policy.v1+json";
+const POLICY_MEDIA_TYPE: &str = "application/vnd.scicapsule.trust-policy.v2+json";
 const REQUEST_MEDIA_TYPE: &str = "application/vnd.scicapsule.hub-run-request.v1+json";
 const RESULT_MEDIA_TYPE: &str = "application/vnd.scicapsule.hub-run-result.v1+json";
 
@@ -130,6 +130,8 @@ struct HubRunResult {
     entrypoint: String,
     matched_signers: Vec<String>,
     required_signatures: u32,
+    policy_digest: String,
+    policy_revision: u64,
 }
 
 impl HubRunResult {
@@ -415,6 +417,11 @@ fn hub_run(args: &[String]) -> Result<String, ProductError> {
         read_regular_file_bounded(&policy_path, MAX_TRUST_POLICY_BYTES, "trust policy")?;
     let policy = TrustPolicy::from_json(&policy_bytes)
         .map_err(|error| ProductError::operation(format!("invalid trust policy: {error}")))?;
+    if !policy.enforces_lifecycle() {
+        return Err(ProductError::operation(
+            "Hub execution authorization requires lifecycle trust policy v2",
+        ));
+    }
     let trust = policy
         .verify(&capsule_bytes, &request.signatures)
         .map_err(|error| ProductError::operation(format!("Hub execution trust failed: {error}")))?;
@@ -475,6 +482,10 @@ fn hub_run(args: &[String]) -> Result<String, ProductError> {
         entrypoint: capsule.manifest().entrypoint().to_string(),
         matched_signers: trust.matched_signers,
         required_signatures: trust.required_signatures,
+        policy_digest: trust.policy_digest,
+        policy_revision: trust
+            .policy_revision
+            .expect("Hub execution requires policy v2"),
     };
     write_new_file(&result_path, &result.to_json()?, "Hub execution result")?;
     Ok(format!(
@@ -568,7 +579,7 @@ fn create_manifest(args: &[String]) -> Result<String, ProductError> {
 
     let mut metadata = BTreeMap::new();
     metadata.insert("canonical_capsule_owner".to_owned(), "scirust".to_owned());
-    metadata.insert("contract".to_owned(), "scicapsule-hub-v1".to_owned());
+    metadata.insert("contract".to_owned(), "scicapsule-hub-v3".to_owned());
 
     let manifest = HubComponentManifest {
         schema_version: HUB_MANIFEST_SCHEMA_VERSION,
@@ -785,7 +796,7 @@ mod tests {
     }
 
     #[test]
-    fn manifest_shape_matches_hub_v1_process_contract() {
+    fn manifest_shape_publishes_lifecycle_policy_as_hub_v3_contract() {
         let dir = tempfile::tempdir().unwrap();
         let output = dir.path().join("component.json");
         create_manifest(&[
@@ -801,6 +812,12 @@ mod tests {
         assert_eq!(value["schema_version"], 1);
         assert_eq!(value["kind"], "tool");
         assert_eq!(value["capabilities"][0]["name"], "capsule.execute");
+        assert_eq!(value["capabilities"][0]["contract_version"], "3.0.0");
+        assert_eq!(
+            value["capabilities"][0]["inputs"][1]["description"],
+            "application/vnd.scicapsule.trust-policy.v2+json"
+        );
+        assert_eq!(value["metadata"]["contract"], "scicapsule-hub-v3");
         assert_eq!(value["execution"]["type"], "process");
         assert_eq!(value["execution"]["args"][2], "{input:capsule}");
         assert_eq!(value["execution"]["args"][8], "{output:result}");

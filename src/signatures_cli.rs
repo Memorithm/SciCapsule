@@ -31,6 +31,9 @@ struct TrustSummary {
     trusted: bool,
     matched_signers: Vec<String>,
     required_signatures: u32,
+    policy_digest: String,
+    policy_version: u32,
+    policy_revision: Option<u64>,
 }
 
 #[derive(Debug, Eq, PartialEq, Serialize)]
@@ -106,6 +109,9 @@ pub(crate) fn run(args: &[String]) -> Result<String, CliError> {
             trusted: true,
             matched_signers: decision.matched_signers,
             required_signatures: decision.required_signatures,
+            policy_digest: decision.policy_digest,
+            policy_version: decision.policy_version,
+            policy_revision: decision.policy_revision,
         })
     } else {
         None
