@@ -483,7 +483,9 @@ fn hub_run(args: &[String]) -> Result<String, ProductError> {
         matched_signers: trust.matched_signers,
         required_signatures: trust.required_signatures,
         policy_digest: trust.policy_digest,
-        policy_revision: trust.policy_revision.expect("Hub execution requires policy v2"),
+        policy_revision: trust
+            .policy_revision
+            .expect("Hub execution requires policy v2"),
     };
     write_new_file(&result_path, &result.to_json()?, "Hub execution result")?;
     Ok(format!(

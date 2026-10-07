@@ -181,7 +181,9 @@ impl TrustPolicy {
                 .trusted_keys
                 .iter()
                 .find(|key| key.name == *name)
-                .ok_or_else(|| TrustPolicyError::new(format!("cannot revoke unknown key {name:?}")))?;
+                .ok_or_else(|| {
+                    TrustPolicyError::new(format!("cannot revoke unknown key {name:?}"))
+                })?;
             let fingerprint = public_key_digest(&key.public_key);
             if !next
                 .revoked_keys
@@ -329,8 +331,12 @@ impl TrustPolicy {
 
     fn validate_at_unix_seconds(&self, now: u64) -> Result<(), TrustPolicyError> {
         if self.version == TRUST_POLICY_LIFECYCLE_VERSION {
-            let from = self.valid_from_unix_seconds.expect("validated v2 valid_from");
-            let until = self.valid_until_unix_seconds.expect("validated v2 valid_until");
+            let from = self
+                .valid_from_unix_seconds
+                .expect("validated v2 valid_from");
+            let until = self
+                .valid_until_unix_seconds
+                .expect("validated v2 valid_until");
             if now < from {
                 return Err(TrustPolicyError::new(format!(
                     "trust policy is not valid before {from}; current time is {now}"
@@ -364,7 +370,10 @@ impl TrustPolicy {
     }
 
     fn validate(&self) -> Result<(), TrustPolicyError> {
-        if !matches!(self.version, TRUST_POLICY_VERSION | TRUST_POLICY_LIFECYCLE_VERSION) {
+        if !matches!(
+            self.version,
+            TRUST_POLICY_VERSION | TRUST_POLICY_LIFECYCLE_VERSION
+        ) {
             return Err(TrustPolicyError::new(format!(
                 "unsupported trust policy version {}; expected {} or {}",
                 self.version, TRUST_POLICY_VERSION, TRUST_POLICY_LIFECYCLE_VERSION
@@ -385,13 +394,14 @@ impl TrustPolicy {
                 }
             }
             TRUST_POLICY_LIFECYCLE_VERSION => {
-                let policy_id = self.policy_id.as_deref().ok_or_else(|| {
-                    TrustPolicyError::new("trust policy v2 requires policy_id")
-                })?;
+                let policy_id = self
+                    .policy_id
+                    .as_deref()
+                    .ok_or_else(|| TrustPolicyError::new("trust policy v2 requires policy_id"))?;
                 validate_key_name(policy_id)?;
-                let revision = self.revision.ok_or_else(|| {
-                    TrustPolicyError::new("trust policy v2 requires revision")
-                })?;
+                let revision = self
+                    .revision
+                    .ok_or_else(|| TrustPolicyError::new("trust policy v2 requires revision"))?;
                 if revision == 0 {
                     return Err(TrustPolicyError::new("policy revision must be at least 1"));
                 }
@@ -514,10 +524,14 @@ fn public_key_digest(bytes: &[u8]) -> String {
 }
 
 fn validate_digest(value: &str) -> Result<(), TrustPolicyError> {
-    let hex = value.strip_prefix("sha256:").ok_or_else(|| {
-        TrustPolicyError::new("digest must use sha256:<64 lowercase hex> form")
-    })?;
-    if hex.len() != 64 || !hex.bytes().all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f')) {
+    let hex = value
+        .strip_prefix("sha256:")
+        .ok_or_else(|| TrustPolicyError::new("digest must use sha256:<64 lowercase hex> form"))?;
+    if hex.len() != 64
+        || !hex
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
+    {
         return Err(TrustPolicyError::new(
             "digest must use sha256:<64 lowercase hex> form",
         ));
@@ -735,10 +749,10 @@ mod tests {
         .unwrap();
         let signature = sign_capsule(capsule, &private_pem(20)).unwrap();
         assert!(policy
-            .verify_at_unix_seconds(capsule, &[signature.clone()], 99)
+            .verify_at_unix_seconds(capsule, std::slice::from_ref(&signature), 99)
             .is_err());
         let decision = policy
-            .verify_at_unix_seconds(capsule, &[signature.clone()], 100)
+            .verify_at_unix_seconds(capsule, std::slice::from_ref(&signature), 100)
             .unwrap();
         assert_eq!(decision.policy_version, TRUST_POLICY_LIFECYCLE_VERSION);
         assert_eq!(decision.policy_revision, Some(1));
@@ -785,15 +799,14 @@ mod tests {
             )
             .unwrap();
         assert_eq!(next.revision, Some(2));
-        assert_eq!(next.previous_policy_sha256.as_deref(), Some(digest.as_str()));
+        assert_eq!(
+            next.previous_policy_sha256.as_deref(),
+            Some(digest.as_str())
+        );
         assert_eq!(next.revoked_keys.len(), 1);
         let alpha = sign_capsule(capsule, &private_pem(21)).unwrap();
-        assert!(next
-            .verify_at_unix_seconds(capsule, &[alpha], 150)
-            .is_err());
+        assert!(next.verify_at_unix_seconds(capsule, &[alpha], 150).is_err());
         let beta = sign_capsule(capsule, &private_pem(22)).unwrap();
-        assert!(next
-            .verify_at_unix_seconds(capsule, &[beta], 150)
-            .is_ok());
+        assert!(next.verify_at_unix_seconds(capsule, &[beta], 150).is_ok());
     }
 }

@@ -148,10 +148,39 @@ fn run_product(args: &[String]) -> Result<String, ProductError> {
             minimum_signatures,
             keys,
         } => create_trust_policy_command(&output, minimum_signatures, &keys),
-        ProductCommand::CreateLifecycleTrustPolicy { output, policy_id, valid_from_unix_seconds, valid_until_unix_seconds, minimum_signatures, keys } =>
-            create_lifecycle_trust_policy_command(&output, policy_id, valid_from_unix_seconds, valid_until_unix_seconds, minimum_signatures, &keys),
-        ProductCommand::UpdateTrustPolicy { current, expected_digest, output, valid_from_unix_seconds, valid_until_unix_seconds, minimum_signatures, revoked_names, keys } =>
-            update_trust_policy_command(&current, &expected_digest, &output, valid_from_unix_seconds, valid_until_unix_seconds, minimum_signatures, &revoked_names, &keys),
+        ProductCommand::CreateLifecycleTrustPolicy {
+            output,
+            policy_id,
+            valid_from_unix_seconds,
+            valid_until_unix_seconds,
+            minimum_signatures,
+            keys,
+        } => create_lifecycle_trust_policy_command(
+            &output,
+            policy_id,
+            valid_from_unix_seconds,
+            valid_until_unix_seconds,
+            minimum_signatures,
+            &keys,
+        ),
+        ProductCommand::UpdateTrustPolicy {
+            current,
+            expected_digest,
+            output,
+            valid_from_unix_seconds,
+            valid_until_unix_seconds,
+            minimum_signatures,
+            revoked_names,
+            keys,
+        } => update_trust_policy_command(
+            &current,
+            &expected_digest,
+            &output,
+            (valid_from_unix_seconds, valid_until_unix_seconds),
+            minimum_signatures,
+            &revoked_names,
+            &keys,
+        ),
         ProductCommand::VerifyTrusted {
             capsule,
             policy,
@@ -195,8 +224,12 @@ fn parse_product_command(args: &[String]) -> Result<ProductCommand, ProductError
         [command, rest @ ..] if command == "sign" => parse_sign(rest),
         [command, rest @ ..] if command == "verify-signature" => parse_verify_signature(rest),
         [command, rest @ ..] if command == "create-trust-policy" => parse_create_trust_policy(rest),
-        [command, rest @ ..] if command == "create-lifecycle-policy" => parse_lifecycle_policy(rest, false),
-        [command, rest @ ..] if command == "update-trust-policy" => parse_lifecycle_policy(rest, true),
+        [command, rest @ ..] if command == "create-lifecycle-policy" => {
+            parse_lifecycle_policy(rest, false)
+        }
+        [command, rest @ ..] if command == "update-trust-policy" => {
+            parse_lifecycle_policy(rest, true)
+        }
         [command, rest @ ..] if command == "verify-trusted" => parse_verify_trusted(rest),
         _ => Ok(ProductCommand::Delegate),
     }
@@ -215,53 +248,144 @@ fn parse_lifecycle_policy(args: &[String], update: bool) -> Result<ProductComman
     let mut index = 0;
     while index < args.len() {
         match args[index].as_str() {
-            "--output" => output = Some(PathBuf::from(take_unique_value(args, &mut index, "--output", output.is_some())?)),
-            "--current" if update => current = Some(PathBuf::from(take_unique_value(args, &mut index, "--current", current.is_some())?)),
-            "--expected-digest" if update => expected_digest = Some(take_unique_value(args, &mut index, "--expected-digest", expected_digest.is_some())?),
-            "--policy-id" if !update => policy_id = Some(take_unique_value(args, &mut index, "--policy-id", policy_id.is_some())?),
-            "--valid-from" => valid_from = Some(parse_u64_option(args, &mut index, "--valid-from", valid_from.is_some())?),
-            "--valid-until" => valid_until = Some(parse_u64_option(args, &mut index, "--valid-until", valid_until.is_some())?),
+            "--output" => {
+                output = Some(PathBuf::from(take_unique_value(
+                    args,
+                    &mut index,
+                    "--output",
+                    output.is_some(),
+                )?))
+            }
+            "--current" if update => {
+                current = Some(PathBuf::from(take_unique_value(
+                    args,
+                    &mut index,
+                    "--current",
+                    current.is_some(),
+                )?))
+            }
+            "--expected-digest" if update => {
+                expected_digest = Some(take_unique_value(
+                    args,
+                    &mut index,
+                    "--expected-digest",
+                    expected_digest.is_some(),
+                )?)
+            }
+            "--policy-id" if !update => {
+                policy_id = Some(take_unique_value(
+                    args,
+                    &mut index,
+                    "--policy-id",
+                    policy_id.is_some(),
+                )?)
+            }
+            "--valid-from" => {
+                valid_from = Some(parse_u64_option(
+                    args,
+                    &mut index,
+                    "--valid-from",
+                    valid_from.is_some(),
+                )?)
+            }
+            "--valid-until" => {
+                valid_until = Some(parse_u64_option(
+                    args,
+                    &mut index,
+                    "--valid-until",
+                    valid_until.is_some(),
+                )?)
+            }
             "--require" => {
                 let value = parse_u64_option(args, &mut index, "--require", required.is_some())?;
-                required = Some(u32::try_from(value).map_err(|_| ProductError::usage("--require is too large"))?);
+                required = Some(
+                    u32::try_from(value)
+                        .map_err(|_| ProductError::usage("--require is too large"))?,
+                );
             }
             "--revoke" if update => {
                 revoked_names.push(take_value(args, &mut index, "--revoke")?);
-                if revoked_names.len() > MAX_TRUSTED_KEYS { return Err(ProductError::usage("too many --revoke values")); }
+                if revoked_names.len() > MAX_TRUSTED_KEYS {
+                    return Err(ProductError::usage("too many --revoke values"));
+                }
             }
-            argument if argument.starts_with('-') => return Err(ProductError::usage(format!("unknown lifecycle-policy option: {argument}"))),
+            argument if argument.starts_with('-') => {
+                return Err(ProductError::usage(format!(
+                    "unknown lifecycle-policy option: {argument}"
+                )))
+            }
             mapping => {
-                let (name, path) = mapping.split_once('=').ok_or_else(|| ProductError::usage(format!("trusted key mapping must be NAME=PUBLIC_KEY.pem: {mapping}")))?;
-                if name.is_empty() || path.is_empty() { return Err(ProductError::usage("trusted key mapping must contain a non-empty name and path")); }
+                let (name, path) = mapping.split_once('=').ok_or_else(|| {
+                    ProductError::usage(format!(
+                        "trusted key mapping must be NAME=PUBLIC_KEY.pem: {mapping}"
+                    ))
+                })?;
+                if name.is_empty() || path.is_empty() {
+                    return Err(ProductError::usage(
+                        "trusted key mapping must contain a non-empty name and path",
+                    ));
+                }
                 keys.push((name.to_owned(), PathBuf::from(path)));
-                if keys.len() > MAX_TRUSTED_KEYS { return Err(ProductError::usage("too many trusted keys")); }
+                if keys.len() > MAX_TRUSTED_KEYS {
+                    return Err(ProductError::usage("too many trusted keys"));
+                }
             }
         }
         index += 1;
     }
-    if keys.is_empty() { return Err(ProductError::usage("lifecycle policy requires at least one NAME=PUBLIC_KEY.pem mapping")); }
-    let output = output.ok_or_else(|| ProductError::usage("lifecycle policy requires --output FILE"))?;
-    let valid_from_unix_seconds = valid_from.ok_or_else(|| ProductError::usage("lifecycle policy requires --valid-from UNIX"))?;
-    let valid_until_unix_seconds = valid_until.ok_or_else(|| ProductError::usage("lifecycle policy requires --valid-until UNIX"))?;
-    let minimum_signatures = required.filter(|v| *v > 0).ok_or_else(|| ProductError::usage("lifecycle policy requires --require N >= 1"))?;
+    if keys.is_empty() {
+        return Err(ProductError::usage(
+            "lifecycle policy requires at least one NAME=PUBLIC_KEY.pem mapping",
+        ));
+    }
+    let output =
+        output.ok_or_else(|| ProductError::usage("lifecycle policy requires --output FILE"))?;
+    let valid_from_unix_seconds = valid_from
+        .ok_or_else(|| ProductError::usage("lifecycle policy requires --valid-from UNIX"))?;
+    let valid_until_unix_seconds = valid_until
+        .ok_or_else(|| ProductError::usage("lifecycle policy requires --valid-until UNIX"))?;
+    let minimum_signatures = required
+        .filter(|v| *v > 0)
+        .ok_or_else(|| ProductError::usage("lifecycle policy requires --require N >= 1"))?;
     if update {
         Ok(ProductCommand::UpdateTrustPolicy {
-            current: current.ok_or_else(|| ProductError::usage("update-trust-policy requires --current FILE"))?,
-            expected_digest: expected_digest.ok_or_else(|| ProductError::usage("update-trust-policy requires --expected-digest SHA256"))?,
-            output, valid_from_unix_seconds, valid_until_unix_seconds, minimum_signatures, revoked_names, keys,
+            current: current.ok_or_else(|| {
+                ProductError::usage("update-trust-policy requires --current FILE")
+            })?,
+            expected_digest: expected_digest.ok_or_else(|| {
+                ProductError::usage("update-trust-policy requires --expected-digest SHA256")
+            })?,
+            output,
+            valid_from_unix_seconds,
+            valid_until_unix_seconds,
+            minimum_signatures,
+            revoked_names,
+            keys,
         })
     } else {
         Ok(ProductCommand::CreateLifecycleTrustPolicy {
             output,
-            policy_id: policy_id.ok_or_else(|| ProductError::usage("create-lifecycle-policy requires --policy-id ID"))?,
-            valid_from_unix_seconds, valid_until_unix_seconds, minimum_signatures, keys,
+            policy_id: policy_id.ok_or_else(|| {
+                ProductError::usage("create-lifecycle-policy requires --policy-id ID")
+            })?,
+            valid_from_unix_seconds,
+            valid_until_unix_seconds,
+            minimum_signatures,
+            keys,
         })
     }
 }
 
-fn parse_u64_option(args: &[String], index: &mut usize, option: &str, already_set: bool) -> Result<u64, ProductError> {
+fn parse_u64_option(
+    args: &[String],
+    index: &mut usize,
+    option: &str,
+    already_set: bool,
+) -> Result<u64, ProductError> {
     let raw = take_unique_value(args, index, option, already_set)?;
-    raw.parse::<u64>().map_err(|_| ProductError::usage(format!("{option} expects an unsigned integer, got {raw:?}")))
+    raw.parse::<u64>().map_err(|_| {
+        ProductError::usage(format!("{option} expects an unsigned integer, got {raw:?}"))
+    })
 }
 
 fn parse_sign(args: &[String]) -> Result<ProductCommand, ProductError> {
@@ -605,10 +729,12 @@ fn create_trust_policy_command(
 }
 
 fn read_named_pem_keys(keys: &[(String, PathBuf)]) -> Result<Vec<(String, String)>, ProductError> {
-    keys.iter().map(|(name, path)| {
-        read_regular_utf8_bounded(path, MAX_KEY_FILE_BYTES, "trusted public key")
-            .map(|pem| (name.clone(), pem))
-    }).collect()
+    keys.iter()
+        .map(|(name, path)| {
+            read_regular_utf8_bounded(path, MAX_KEY_FILE_BYTES, "trusted public key")
+                .map(|pem| (name.clone(), pem))
+        })
+        .collect()
 }
 
 fn create_lifecycle_trust_policy_command(
@@ -619,30 +745,70 @@ fn create_lifecycle_trust_policy_command(
     minimum_signatures: u32,
     keys: &[(String, PathBuf)],
 ) -> Result<String, ProductError> {
-    let policy = TrustPolicy::from_named_pem_keys_v2(policy_id, valid_from_unix_seconds, valid_until_unix_seconds, minimum_signatures, read_named_pem_keys(keys)?)
-        .map_err(|error| ProductError::operation(format!("invalid lifecycle trust policy: {error}")))?;
-    let digest = policy.policy_digest().map_err(|error| ProductError::operation(error.to_string()))?;
-    write_new_file(output, &policy.to_json().map_err(|error| ProductError::operation(error.to_string()))?, "trust policy")?;
-    Ok(format!("created lifecycle trust policy {} revision 1 digest {}\n", output.display(), digest))
+    let policy = TrustPolicy::from_named_pem_keys_v2(
+        policy_id,
+        valid_from_unix_seconds,
+        valid_until_unix_seconds,
+        minimum_signatures,
+        read_named_pem_keys(keys)?,
+    )
+    .map_err(|error| ProductError::operation(format!("invalid lifecycle trust policy: {error}")))?;
+    let digest = policy
+        .policy_digest()
+        .map_err(|error| ProductError::operation(error.to_string()))?;
+    write_new_file(
+        output,
+        &policy
+            .to_json()
+            .map_err(|error| ProductError::operation(error.to_string()))?,
+        "trust policy",
+    )?;
+    Ok(format!(
+        "created lifecycle trust policy {} revision 1 digest {}\n",
+        output.display(),
+        digest
+    ))
 }
 
 fn update_trust_policy_command(
     current: &Path,
     expected_digest: &str,
     output: &Path,
-    valid_from_unix_seconds: u64,
-    valid_until_unix_seconds: u64,
+    validity: (u64, u64),
     minimum_signatures: u32,
     revoked_names: &[String],
     keys: &[(String, PathBuf)],
 ) -> Result<String, ProductError> {
-    let current_bytes = read_regular_file_bounded(current, MAX_TRUST_POLICY_BYTES, "current trust policy")?;
-    let current_policy = TrustPolicy::from_json(&current_bytes).map_err(|error| ProductError::operation(format!("invalid current trust policy: {error}")))?;
-    let next = current_policy.update_from_named_pem_keys(expected_digest, valid_from_unix_seconds, valid_until_unix_seconds, minimum_signatures, read_named_pem_keys(keys)?, revoked_names)
+    let current_bytes =
+        read_regular_file_bounded(current, MAX_TRUST_POLICY_BYTES, "current trust policy")?;
+    let current_policy = TrustPolicy::from_json(&current_bytes).map_err(|error| {
+        ProductError::operation(format!("invalid current trust policy: {error}"))
+    })?;
+    let next = current_policy
+        .update_from_named_pem_keys(
+            expected_digest,
+            validity.0,
+            validity.1,
+            minimum_signatures,
+            read_named_pem_keys(keys)?,
+            revoked_names,
+        )
         .map_err(|error| ProductError::operation(format!("cannot update trust policy: {error}")))?;
-    let digest = next.policy_digest().map_err(|error| ProductError::operation(error.to_string()))?;
-    write_new_file(output, &next.to_json().map_err(|error| ProductError::operation(error.to_string()))?, "trust policy")?;
-    Ok(format!("created trust policy revision {} digest {}\n", next.revision.expect("v2 revision"), digest))
+    let digest = next
+        .policy_digest()
+        .map_err(|error| ProductError::operation(error.to_string()))?;
+    write_new_file(
+        output,
+        &next
+            .to_json()
+            .map_err(|error| ProductError::operation(error.to_string()))?,
+        "trust policy",
+    )?;
+    Ok(format!(
+        "created trust policy revision {} digest {}\n",
+        next.revision.expect("v2 revision"),
+        digest
+    ))
 }
 
 fn verify_trusted_command(
