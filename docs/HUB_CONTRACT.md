@@ -102,7 +102,9 @@ The result contains:
   "capsule_name": "<canonical manifest name>",
   "entrypoint": "<canonical manifest entrypoint>",
   "matched_signers": ["<local trust-policy signer name>"],
-  "required_signatures": 1
+  "required_signatures": 1,
+  "policy_digest": "sha256:<canonical lifecycle-policy digest>",
+  "policy_revision": 2
 }
 ```
 
@@ -112,6 +114,10 @@ paths or platform-specific process identifiers. Its capsule digest, canonical
 manifest fields and matched-signers decision describe the same in-memory bytes
 that are pinned into private snapshots for execution; caller-controlled capsule
 or policy paths are not reopened after that decision.
+
+Hub execution requires lifecycle policy v2. Validity and cumulative revocation
+are evaluated before the input snapshot or payload process is created; the
+result binds the exact policy digest and revision used for authorization.
 
 On trust failure, malformed input, extraction failure, timeout or non-zero
 entrypoint exit, `hub-run` returns non-zero and does not fabricate a success

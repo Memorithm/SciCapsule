@@ -26,7 +26,7 @@ use std::sync::Mutex;
 use std::thread;
 use std::time::{Duration, Instant};
 
-const EXECUTION_RESULT_SCHEMA_VERSION: u32 = 1;
+const EXECUTION_RESULT_SCHEMA_VERSION: u32 = 2;
 const DEFAULT_TIMEOUT_SECONDS: u64 = 300;
 const MAX_TIMEOUT_SECONDS: u64 = 86_400;
 const DEFAULT_MAX_OUTPUT_BYTES: u64 = 16 * 1024 * 1024;
@@ -66,6 +66,8 @@ struct ExecutionResult {
     entrypoint: String,
     matched_signers: Vec<String>,
     required_signatures: u32,
+    policy_digest: String,
+    policy_revision: u64,
     exit_code: Option<i32>,
     stdout_base64: String,
     stderr_base64: String,
@@ -435,6 +437,8 @@ fn result_for(
         entrypoint: capsule.manifest().entrypoint().to_string(),
         matched_signers: trust.matched_signers.clone(),
         required_signatures: trust.required_signatures,
+        policy_digest: trust.policy_digest.clone(),
+        policy_revision: trust.policy_revision.expect("execution requires policy v2"),
         exit_code: exit_status.code(),
         stdout_base64: Base64::encode_string(&stdout.bytes),
         stderr_base64: Base64::encode_string(&stderr.bytes),
@@ -482,6 +486,11 @@ fn execute(command: RunCommand) -> Result<String, ProductError> {
         read_regular_file_bounded(&command.policy, MAX_TRUST_POLICY_BYTES, "trust policy")?;
     let policy = TrustPolicy::from_json(&policy_bytes)
         .map_err(|error| ProductError::operation(format!("invalid trust policy: {error}")))?;
+    if !policy.enforces_lifecycle() {
+        return Err(ProductError::operation(
+            "execution authorization requires lifecycle trust policy v2",
+        ));
+    }
     let mut signatures = Vec::with_capacity(command.signatures.len());
     for path in &command.signatures {
         let bytes =
@@ -772,8 +781,14 @@ mod tests {
         let capsule_bytes = fs::read(&capsule).unwrap();
         let envelope = crate::signature::sign_capsule(&capsule_bytes, &private_pem).unwrap();
         fs::write(&signature, envelope.to_json().unwrap()).unwrap();
-        let trust =
-            TrustPolicy::from_named_pem_keys(1, vec![("release".to_owned(), public_pem)]).unwrap();
+        let trust = TrustPolicy::from_named_pem_keys_v2(
+            "execution-tests".to_owned(),
+            0,
+            4_102_444_800,
+            1,
+            vec![("release".to_owned(), public_pem)],
+        )
+        .unwrap();
         fs::write(&policy, trust.to_json().unwrap()).unwrap();
         (dir, capsule, signature, policy)
     }

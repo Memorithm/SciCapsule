@@ -130,6 +130,8 @@ struct HubRunResult {
     entrypoint: String,
     matched_signers: Vec<String>,
     required_signatures: u32,
+    policy_digest: String,
+    policy_revision: u64,
 }
 
 impl HubRunResult {
@@ -415,6 +417,11 @@ fn hub_run(args: &[String]) -> Result<String, ProductError> {
         read_regular_file_bounded(&policy_path, MAX_TRUST_POLICY_BYTES, "trust policy")?;
     let policy = TrustPolicy::from_json(&policy_bytes)
         .map_err(|error| ProductError::operation(format!("invalid trust policy: {error}")))?;
+    if !policy.enforces_lifecycle() {
+        return Err(ProductError::operation(
+            "Hub execution authorization requires lifecycle trust policy v2",
+        ));
+    }
     let trust = policy
         .verify(&capsule_bytes, &request.signatures)
         .map_err(|error| ProductError::operation(format!("Hub execution trust failed: {error}")))?;
@@ -475,6 +482,8 @@ fn hub_run(args: &[String]) -> Result<String, ProductError> {
         entrypoint: capsule.manifest().entrypoint().to_string(),
         matched_signers: trust.matched_signers,
         required_signatures: trust.required_signatures,
+        policy_digest: trust.policy_digest,
+        policy_revision: trust.policy_revision.expect("Hub execution requires policy v2"),
     };
     write_new_file(&result_path, &result.to_json()?, "Hub execution result")?;
     Ok(format!(

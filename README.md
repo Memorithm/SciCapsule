@@ -122,6 +122,14 @@ satisfy a multi-key threshold. Signatures from keys absent from the local
 policy do not count. Trust policies and security-sensitive sidecars are bounded
 and opened with no-follow semantics on Unix.
 
+For durable execution authorization, create a time-bounded lifecycle policy v2
+with `create-lifecycle-policy`. It carries a stable policy ID, monotonic
+revision, validity window and cumulative key revocations. Rotate it with
+`update-trust-policy`, which requires the exact canonical current-policy digest
+and emits a digest-linked successor in a new file. `run` and `hub-run` reject
+legacy policy v1; signature inspection and provenance verification retain v1
+compatibility. See [the trust policy specification](docs/TRUST_POLICY.md).
+
 ## Trusted bounded execution
 
 On Unix, `run` verifies canonical capsule integrity and the explicit local trust

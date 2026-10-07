@@ -77,9 +77,15 @@ fn sign(capsule: &Path, private_key: &Path, signature: &Path) {
 
 fn policy(public_key: &Path, output: &Path) {
     expect_success(&[
-        "create-trust-policy".to_owned(),
+        "create-lifecycle-policy".to_owned(),
         "--output".to_owned(),
         output.display().to_string(),
+        "--policy-id".to_owned(),
+        "hub-contract-tests".to_owned(),
+        "--valid-from".to_owned(),
+        "0".to_owned(),
+        "--valid-until".to_owned(),
+        "4102444800".to_owned(),
         "--require".to_owned(),
         "1".to_owned(),
         format!("release={}", public_key.display()),

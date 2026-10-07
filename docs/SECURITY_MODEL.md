@@ -105,6 +105,15 @@ size-bounded; on Unix they are opened with no-follow semantics. The exact policy
 wire format and evaluation rules are documented in
 [`TRUST_POLICY.md`](TRUST_POLICY.md).
 
+Lifecycle policy v2 adds an explicit validity window, stable policy identity,
+monotonic revision, canonical policy digest, predecessor digest and cumulative
+public-key revocations. Controlled updates require the caller to pin the exact
+current digest and create a new file; stale or rollback inputs fail closed.
+Execution and Hub execution require v2. Signature inspection and provenance
+verification retain explicit v1 compatibility without treating v1 as execution
+authorization. Trust decisions expose the policy digest and revision separately
+from capsule signatures.
+
 ## Provenance guarantees
 
 `attest-provenance` and `verify-provenance` consume the capsule through the same
@@ -199,8 +208,9 @@ The exact adapter wire contract and its media types are documented in
   trusted, belongs to a claimed identity, is unrevoked, or is authorized to
   execute code.
 - Trust policy v1 establishes only membership in a local key allowlist plus a
-  distinct-key threshold. It does not provide signer identity, revocation,
-  expiration, timestamps, certificate chains, transparency, or provenance.
+  distinct-key threshold. Lifecycle policy v2 additionally enforces local
+  validity and revocation state, but neither version provides certified signer
+  identity, remote status, transparency, certificate chains, or provenance.
 - A valid SLSA/in-toto provenance statement is evidence about asserted build
   provenance; it is not by itself execution authorization.
 - `run` and `hub-run` are **not OS sandboxes**. They do not restrict payload
