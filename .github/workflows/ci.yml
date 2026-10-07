@@ -1,14 +1,19 @@
 name: CI (pull requests)
 
 on:
+  # pull_request is retained only to validate this bootstrap PR. A follow-up
+  # installation probe removes it after pull_request_target is live on main.
   pull_request:
+  pull_request_target:
+    types: [opened, synchronize, reopened, ready_for_review]
 
 permissions:
   contents: read
 
 jobs:
   quality-and-msrv:
-    # PR-controlled workflow code never targets a persistent internal runner.
+    if: github.event.pull_request.draft == false
+    # The workflow and any checked-out PR code always run on a fresh hosted VM.
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 15
     env:
@@ -19,6 +24,8 @@ jobs:
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
+          repository: ${{ github.event.pull_request.head.repo.full_name }}
+          ref: ${{ github.event.pull_request.head.sha }}
           persist-credentials: false
       - name: Prepare writable toolchain and temporary directories
         run: mkdir -p "$CARGO_HOME" "$TMPDIR" "$RUSTUP_HOME"

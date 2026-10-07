@@ -9,8 +9,8 @@ permissions:
 
 jobs:
   quality-and-msrv:
-    # This workflow is not triggered by pull_request; it only qualifies code
-    # after it has been merged into the protected review flow on main.
+    # This workflow cannot be triggered by a pull request. It qualifies only
+    # code that has already been merged into main.
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: [self-hosted, Linux, ARM64, scirust-arm64, jetson-thor, internal]
     timeout-minutes: 15
