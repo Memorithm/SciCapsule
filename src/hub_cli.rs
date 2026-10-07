@@ -19,12 +19,12 @@ use std::path::{Path, PathBuf};
 const HUB_REQUEST_SCHEMA_VERSION: u32 = 1;
 const HUB_RESULT_SCHEMA_VERSION: u32 = 1;
 const HUB_MANIFEST_SCHEMA_VERSION: u16 = 1;
-const HUB_CAPABILITY_CONTRACT_VERSION: &str = "1.0.0";
+const HUB_CAPABILITY_CONTRACT_VERSION: &str = "3.0.0";
 const MAX_HUB_REQUEST_BYTES: u64 = 512 * 1024;
 const MAX_HUB_RESULT_BYTES: usize = 64 * 1024;
 
 const CAPSULE_MEDIA_TYPE: &str = "application/vnd.scirust.scicap";
-const POLICY_MEDIA_TYPE: &str = "application/vnd.scicapsule.trust-policy.v1+json";
+const POLICY_MEDIA_TYPE: &str = "application/vnd.scicapsule.trust-policy.v2+json";
 const REQUEST_MEDIA_TYPE: &str = "application/vnd.scicapsule.hub-run-request.v1+json";
 const RESULT_MEDIA_TYPE: &str = "application/vnd.scicapsule.hub-run-result.v1+json";
 
@@ -579,7 +579,7 @@ fn create_manifest(args: &[String]) -> Result<String, ProductError> {
 
     let mut metadata = BTreeMap::new();
     metadata.insert("canonical_capsule_owner".to_owned(), "scirust".to_owned());
-    metadata.insert("contract".to_owned(), "scicapsule-hub-v1".to_owned());
+    metadata.insert("contract".to_owned(), "scicapsule-hub-v3".to_owned());
 
     let manifest = HubComponentManifest {
         schema_version: HUB_MANIFEST_SCHEMA_VERSION,
@@ -796,7 +796,7 @@ mod tests {
     }
 
     #[test]
-    fn manifest_shape_matches_hub_v1_process_contract() {
+    fn manifest_shape_publishes_lifecycle_policy_as_hub_v3_contract() {
         let dir = tempfile::tempdir().unwrap();
         let output = dir.path().join("component.json");
         create_manifest(&[
@@ -812,6 +812,12 @@ mod tests {
         assert_eq!(value["schema_version"], 1);
         assert_eq!(value["kind"], "tool");
         assert_eq!(value["capabilities"][0]["name"], "capsule.execute");
+        assert_eq!(value["capabilities"][0]["contract_version"], "3.0.0");
+        assert_eq!(
+            value["capabilities"][0]["inputs"][1]["description"],
+            "application/vnd.scicapsule.trust-policy.v2+json"
+        );
+        assert_eq!(value["metadata"]["contract"], "scicapsule-hub-v3");
         assert_eq!(value["execution"]["type"], "process");
         assert_eq!(value["execution"]["args"][2], "{input:capsule}");
         assert_eq!(value["execution"]["args"][8], "{output:result}");

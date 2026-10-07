@@ -154,6 +154,14 @@ impl TrustPolicy {
                 "current policy digest mismatch: expected {expected_current_digest:?}, actual {current_digest:?}"
             )));
         }
+        let current_valid_from = self
+            .valid_from_unix_seconds
+            .expect("validated v2 valid_from");
+        if valid_from_unix_seconds < current_valid_from {
+            return Err(TrustPolicyError::new(format!(
+                "successor valid_from_unix_seconds {valid_from_unix_seconds} precedes current policy start {current_valid_from}"
+            )));
+        }
         let mut next = Self::from_named_pem_keys_v2(
             self.policy_id.clone().expect("validated v2 policy id"),
             valid_from_unix_seconds,
@@ -808,5 +816,17 @@ mod tests {
         assert!(next.verify_at_unix_seconds(capsule, &[alpha], 150).is_err());
         let beta = sign_capsule(capsule, &private_pem(22)).unwrap();
         assert!(next.verify_at_unix_seconds(capsule, &[beta], 150).is_ok());
+
+        let next_digest = next.policy_digest().unwrap();
+        assert!(next
+            .update_from_named_pem_keys(
+                &next_digest,
+                125,
+                400,
+                1,
+                vec![("alpha".to_owned(), public_pem(21))],
+                &[],
+            )
+            .is_err());
     }
 }

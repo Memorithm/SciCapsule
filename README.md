@@ -191,7 +191,8 @@ scicapsule hub-manifest \
   --output scicapsule-component.json
 ```
 
-The generated component declares capability `capsule.execute`. Hub resolves its
+The generated component declares lifecycle-aware capability
+`capsule.execute@3.0.0` with trust-policy media type v2. Hub resolves its
 `{input:capsule}`, `{input:policy}`, `{input:request}`, and `{output:result}`
 placeholders as direct argv values. `hub-run` then performs canonical capsule
 validation and local trust authorization before delegating to the same bounded

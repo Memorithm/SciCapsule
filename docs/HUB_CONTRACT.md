@@ -1,4 +1,4 @@
-# SciCapsule ↔ SciRust Hub contract v1
+# SciCapsule ↔ SciRust Hub contract v3
 
 ## Scope
 
@@ -7,7 +7,7 @@ SciCapsule. It does not modify or extend the canonical `.scicap` container.
 Canonical capsule schema, encoding, manifest fields, entrypoint semantics and
 payload integrity remain owned by the pinned SciRust capsule crates.
 
-Contract v1 deliberately uses the Hub's existing `process` execution binding.
+Contract v3 deliberately uses the Hub's existing `process` execution binding.
 The Hub supplies immutable input artifacts as direct argv values; SciCapsule
 performs capsule integrity validation, local trust-policy authorization and the
 bounded execution defined by `scicapsule run`.
@@ -17,7 +17,7 @@ bounded execution defined by `scicapsule run`.
 The generated Hub component manifest declares:
 
 - capability: `capsule.execute`;
-- contract version: `1.0.0`;
+- contract version: `3.0.0`;
 - component kind: `tool`;
 - execution binding: `process`;
 - no shell interpolation.
@@ -27,7 +27,7 @@ The capability has three required inputs and one required output:
 | Port | Direction | Media type |
 | --- | --- | --- |
 | `capsule` | input | `application/vnd.scirust.scicap` |
-| `policy` | input | `application/vnd.scicapsule.trust-policy.v1+json` |
+| `policy` | input | `application/vnd.scicapsule.trust-policy.v2+json` |
 | `request` | input | `application/vnd.scicapsule.hub-run-request.v1+json` |
 | `result` | output | `application/vnd.scicapsule.hub-run-result.v1+json` |
 
@@ -85,7 +85,7 @@ Signatures live inside the request artifact rather than being separate Hub
 ports. This preserves arbitrary trust-policy thresholds without requiring a
 fixed number of signature inputs in the Hub component manifest.
 
-## Hub execution result v1
+## Hub execution result wire schema v1
 
 A successful `hub-run` creates a new result file. If the result destination
 already exists as any filesystem object, including a symlink, `hub-run` refuses
@@ -155,7 +155,7 @@ group.
 ## Security boundary
 
 This contract does **not** turn SciRust Hub or SciCapsule into an OS sandbox.
-It makes authorization and invocation explicit and reproducible, but v1 does
+It makes authorization and invocation explicit and reproducible, but v3 does
 not provide filesystem, network, syscall, privilege, CPU or memory isolation.
 Hostile payloads require a real external sandbox/container boundary.
 
@@ -172,9 +172,11 @@ transactional output reservation must provide that boundary externally.
 
 ## Versioning
 
-The wire request/result schema version and capability contract version are
-independent from the SciCapsule package version and the canonical `.scicap`
-format version.
+The v3 capability contract deliberately retains request and result wire schema
+version 1. The breaking input-policy requirement is advertised by capability
+version `3.0.0` and the v2 policy media type; existing result consumers may
+ignore the additive policy digest/revision fields. These versions are
+independent from the SciCapsule package version and canonical `.scicap` format.
 
 A breaking change to request/result semantics requires a new Hub contract
 version. Additive Hub capabilities should not mutate the canonical capsule

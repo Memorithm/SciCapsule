@@ -1,8 +1,15 @@
 # SciCapsule Hub execution evidence v2
 
-`capsule.execute@2.0.0` is an additive evidence contract. It does not replace or reinterpret the existing SciCapsule `capsule.execute@1.0.0` trust and bounded-execution semantics.
+`capsule.execute@2.0.0` is the additive evidence-record contract. Its launcher
+now invokes the lifecycle-aware SciCapsule `capsule.execute@3.0.0` bounded
+execution contract and therefore requires trust-policy media type v2.
 
-The `scicapsule-hub-evidence-v2` launcher snapshots the caller-provided capsule, trust policy, and Hub request into a private temporary directory, computes immutable SHA-256 identities, and invokes the existing `scicapsule hub-run` implementation on those pinned snapshots. The v1 result remains the authoritative execution/trust result and is itself hashed into the v2 record.
+The `scicapsule-hub-evidence-v2` launcher snapshots the caller-provided capsule,
+trust policy, and Hub request into a private temporary directory, computes
+immutable SHA-256 identities, and invokes `scicapsule hub-run` on those pinned
+snapshots. The source result retains wire schema v1 and is itself hashed into
+the v2 evidence record; its policy digest/revision fields bind the lifecycle
+authorization decision.
 
 The v2 result media type is `application/vnd.scicapsule.hub-run-result.v2+json` and records:
 
