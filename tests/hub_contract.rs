@@ -168,6 +168,12 @@ fn trusted_hub_contract_executes_exact_capsule_and_emits_machine_result() {
     assert_eq!(result["entrypoint"], "bin/run");
     assert_eq!(result["matched_signers"], serde_json::json!(["release"]));
     assert_eq!(result["required_signatures"], 1);
+    assert_eq!(result["policy_revision"], 1);
+    let policy_digest = result["policy_digest"]
+        .as_str()
+        .expect("policy digest string");
+    assert!(policy_digest.starts_with("sha256:"));
+    assert_eq!(policy_digest.len(), 71);
     assert!(!String::from_utf8_lossy(&result_bytes).contains(&dir.path().display().to_string()));
 }
 
