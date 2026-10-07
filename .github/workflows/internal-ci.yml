@@ -1,15 +1,18 @@
-name: CI (pull requests)
+name: CI (internal main)
 
 on:
-  pull_request:
+  push:
+    branches: [main]
 
 permissions:
   contents: read
 
 jobs:
   quality-and-msrv:
-    # PR-controlled workflow code never targets a persistent internal runner.
-    runs-on: ubuntu-24.04-arm
+    # This workflow is not triggered by pull_request; it only qualifies code
+    # after it has been merged into the protected review flow on main.
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: [self-hosted, Linux, ARM64, scirust-arm64, jetson-thor, internal]
     timeout-minutes: 15
     env:
       CARGO_INCREMENTAL: 0
