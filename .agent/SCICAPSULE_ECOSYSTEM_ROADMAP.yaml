@@ -1,7 +1,7 @@
 schema_version: 1
 kind: scicapsule_ecosystem_agent_roadmap
 status: active
-last_updated: "2026-08-31"
+last_updated: "2026-10-11"
 repository: Memorithm/SciCapsule
 intended_consumer: autonomous_coding_agent
 merge_policy: never_merge_this_file_to_default_branch_unless_user_explicitly_requests
@@ -26,6 +26,11 @@ verified_current_facts:
   - current_execution_is_not_an_OS_sandbox
   - non_Unix_execution_fails_closed_for_current_bounded_execution_guarantees
   - a_versioned_SciRust_Hub_process_contract_exists_and_pins_verified_inputs_before_execution
+  - lifecycle_trust_policy_v2_has_stable_identity_monotonic_revision_validity_windows_cumulative_revocations_and_digest_linked_updates
+  - legacy_policy_v1_remains_signature_inspection_evidence_but_is_not_execution_authorization
+  - capsule_execute_v3_requires_lifecycle_policy_v2_and_binds_policy_digest_and_revision_into_results
+  - lifecycle_execution_evidence_is_published_as_distinct_capsule_execute_v4_and_result_media_type_v3_without_reinterpreting_v2
+  - MEM_12_PR_33_merged_as_e0aee9fd081570eb77d0ed5c3ffa7bdda24e504a_and_corrective_PR_34_merged_as_94e5a000ba862d0ae1d1b41353353ec72b5cded5
 
 invariants:
   - canonical_scicap_bytes_are_not_silently_mutated_by_trust_provenance_or_orchestration_metadata
@@ -114,7 +119,17 @@ roadmap:
       - never_embed_private_keys_or_implicit_trust_anchors_in_capsules
   - id: CAP3
     name: Reproducible execution evidence
-    status: planned
+    status: active
+    completed_slices:
+      - id: CAP3a
+        name: Lifecycle policy identity in execution evidence
+        status: complete
+        completion_evidence:
+          - MEM_12_lifecycle_policy_v2_and_controlled_updates
+          - PR_33_merged_as_e0aee9fd081570eb77d0ed5c3ffa7bdda24e504a
+          - PR_34_corrected_evidence_contract_versioning_and_merged_as_94e5a000ba862d0ae1d1b41353353ec72b5cded5
+          - exact_candidate_CI_38110915097_passed_format_check_clippy_97_tests_and_MSRV_1_89
+          - capsule_execute_v4_and_hub_run_result_v3_bind_policy_digest_and_revision
     goals:
       - emit_versioned_execution_result_and_environment_scope
       - integrate_with_SciRust_Verify_without_reimplementing_verdict_semantics
@@ -123,7 +138,7 @@ roadmap:
     name: Hub contract hardening
     status: active
     goals:
-      - preserve_existing_v1_contract_compatibility
+      - preserve_wire_v1_compatibility_where_advertised_and_version_breaking_authorization_requirements
       - add_compatibility_tests_on_both_repositories_for_future_versions
       - keep_TOCTOU_resistance_by_pinning_authorized_bytes
       - document_failure_and_retry_semantics_for_side_effecting_capsules
