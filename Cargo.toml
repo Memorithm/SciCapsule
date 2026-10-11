@@ -29,7 +29,7 @@ name = "scicapsule"
 path = "src/product_main.rs"
 
 [[bin]]
-name = "scicapsule-hub-evidence-v2"
+name = "scicapsule-hub-evidence-v3"
 path = "src/hub_evidence_v2.rs"
 
 [lints.rust]
