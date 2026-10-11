@@ -262,9 +262,7 @@ fn execute(cli: Cli) -> Result<String, String> {
     }
 
     if source.policy_digest.is_empty() || source.policy_revision == 0 {
-        return Err(
-            "qualified SciCapsule process omitted lifecycle policy identity".to_owned(),
-        );
+        return Err("qualified SciCapsule process omitted lifecycle policy identity".to_owned());
     }
 
     let result = HubRunResultV3 {
