@@ -8,9 +8,9 @@ use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode, Stdio};
 
-const CONTRACT: &str = "capsule.execute@2.0.0";
+const CONTRACT: &str = "capsule.execute@4.0.0";
 const RESULT_MEDIA_TYPE_V1: &str = "application/vnd.scicapsule.hub-run-result.v1+json";
-const RESULT_MEDIA_TYPE_V2: &str = "application/vnd.scicapsule.hub-run-result.v2+json";
+const RESULT_MEDIA_TYPE_V3: &str = "application/vnd.scicapsule.hub-run-result.v3+json";
 const MAX_REQUEST_BYTES: u64 = 512 * 1024;
 const MAX_POLICY_BYTES: u64 = 256 * 1024;
 const MAX_RESULT_BYTES: u64 = 64 * 1024;
@@ -42,6 +42,8 @@ struct HubRunResultV1 {
     entrypoint: String,
     matched_signers: Vec<String>,
     required_signatures: u32,
+    policy_digest: String,
+    policy_revision: u64,
 }
 
 #[derive(Debug, Serialize)]
@@ -67,7 +69,7 @@ struct SourceResultIdentity {
 }
 
 #[derive(Debug, Serialize)]
-struct HubRunResultV2 {
+struct HubRunResultV3 {
     schema_version: u32,
     contract: &'static str,
     media_type: &'static str,
@@ -80,6 +82,8 @@ struct HubRunResultV2 {
     entrypoint: String,
     matched_signers: Vec<String>,
     required_signatures: u32,
+    policy_digest: String,
+    policy_revision: u64,
     runtime: RuntimeIdentity,
     environment_scope: EnvironmentScope,
     source_result: SourceResultIdentity,
@@ -104,7 +108,7 @@ fn run(args: Vec<String>) -> Result<String, String> {
     {
         let _ = args;
         return Err(
-            "capsule.execute@2.0.0 requires the Unix bounded-process contract; refusing to execute"
+            "capsule.execute@4.0.0 requires the Unix bounded-process contract; refusing to execute"
                 .to_owned(),
         );
     }
@@ -155,7 +159,7 @@ fn parse(args: &[String]) -> Result<Cli, String> {
 
 #[cfg(unix)]
 fn execute(cli: Cli) -> Result<String, String> {
-    ensure_absent(&cli.result, "v2 result")?;
+    ensure_absent(&cli.result, "v3 result")?;
 
     let request_bytes = read_regular_bounded(&cli.request, MAX_REQUEST_BYTES, "Hub request")?;
     let request_sha256 = sha256_hex(&request_bytes);
@@ -173,9 +177,9 @@ fn execute(cli: Cli) -> Result<String, String> {
         .ok_or_else(|| "Hub request max_bytes overflows capsule bound".to_owned())?;
 
     let work = tempfile::Builder::new()
-        .prefix("scicapsule-hub-v2-")
+        .prefix("scicapsule-hub-v3-")
         .tempdir()
-        .map_err(|error| format!("cannot create private v2 input snapshot: {error}"))?;
+        .map_err(|error| format!("cannot create private v3 input snapshot: {error}"))?;
     let capsule_snapshot = work.path().join("capsule.scicap");
     let policy_snapshot = work.path().join("policy.json");
     let request_snapshot = work.path().join("request.json");
@@ -191,7 +195,7 @@ fn execute(cli: Cli) -> Result<String, String> {
     write_new_file(&request_snapshot, &request_bytes, "request snapshot")?;
 
     let launcher = std::env::current_exe()
-        .map_err(|error| format!("cannot identify v2 launcher executable: {error}"))?;
+        .map_err(|error| format!("cannot identify v3 launcher executable: {error}"))?;
     let scicapsule_program = match cli.scicapsule_program {
         Some(path) => path,
         None => sibling_scicapsule(&launcher)?,
@@ -202,7 +206,7 @@ fn execute(cli: Cli) -> Result<String, String> {
     let launcher_sha256 = hash_regular_bounded(
         &launcher,
         MAX_RUNTIME_BINARY_BYTES,
-        "v2 launcher executable",
+        "v3 launcher executable",
     )?;
     let scicapsule_sha256 = hash_regular_bounded(
         &scicapsule_program,
@@ -252,15 +256,19 @@ fn execute(cli: Cli) -> Result<String, String> {
     }
     if source.capsule_sha256 != capsule_sha256 {
         return Err(
-            "SciCapsule v1 result capsule identity disagrees with the v2 pinned snapshot"
+            "SciCapsule v1 result capsule identity disagrees with the v3 pinned snapshot"
                 .to_owned(),
         );
     }
 
-    let result = HubRunResultV2 {
-        schema_version: 2,
+    if source.policy_digest.is_empty() || source.policy_revision == 0 {
+        return Err("qualified SciCapsule process omitted lifecycle policy identity".to_owned());
+    }
+
+    let result = HubRunResultV3 {
+        schema_version: 3,
         contract: CONTRACT,
-        media_type: RESULT_MEDIA_TYPE_V2,
+        media_type: RESULT_MEDIA_TYPE_V3,
         status: source.status,
         capsule_sha256,
         policy_sha256,
@@ -270,6 +278,8 @@ fn execute(cli: Cli) -> Result<String, String> {
         entrypoint: source.entrypoint,
         matched_signers: source.matched_signers,
         required_signatures: source.required_signatures,
+        policy_digest: source.policy_digest,
+        policy_revision: source.policy_revision,
         runtime: RuntimeIdentity {
             launcher_sha256,
             scicapsule_sha256,
@@ -289,12 +299,12 @@ fn execute(cli: Cli) -> Result<String, String> {
         trust_is_scientific_verdict: false,
     };
     let mut encoded = serde_json::to_vec_pretty(&result)
-        .map_err(|error| format!("cannot encode SciCapsule v2 result: {error}"))?;
+        .map_err(|error| format!("cannot encode SciCapsule v3 result: {error}"))?;
     encoded.push(b'\n');
     if encoded.len() as u64 > MAX_RESULT_BYTES {
-        return Err("SciCapsule v2 result exceeded size bound".to_owned());
+        return Err("SciCapsule v3 result exceeded size bound".to_owned());
     }
-    write_new_file(&cli.result, &encoded, "SciCapsule v2 result")?;
+    write_new_file(&cli.result, &encoded, "SciCapsule v3 result")?;
     Ok(format!(
         "wrote SciCapsule Hub execution evidence {}",
         cli.result.display()
@@ -330,7 +340,7 @@ fn signature_identities(signatures: &[Value]) -> Result<Vec<String>, String> {
 fn sibling_scicapsule(launcher: &Path) -> Result<PathBuf, String> {
     let parent = launcher
         .parent()
-        .ok_or_else(|| "v2 launcher has no parent directory".to_owned())?;
+        .ok_or_else(|| "v3 launcher has no parent directory".to_owned())?;
     Ok(parent.join("scicapsule"))
 }
 
@@ -497,6 +507,15 @@ mod tests {
         assert_eq!(
             sibling_scicapsule(launcher).unwrap(),
             PathBuf::from("/opt/scicapsule/libexec/scicapsule")
+        );
+    }
+
+    #[test]
+    fn lifecycle_evidence_uses_a_distinct_versioned_contract() {
+        assert_eq!(CONTRACT, "capsule.execute@4.0.0");
+        assert_eq!(
+            RESULT_MEDIA_TYPE_V3,
+            "application/vnd.scicapsule.hub-run-result.v3+json"
         );
     }
 }

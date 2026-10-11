@@ -1,16 +1,16 @@
 use std::process::Command;
 
 #[test]
-fn hub_evidence_v2_binary_rejects_missing_inputs() {
-    let binary = env!("CARGO_BIN_EXE_scicapsule-hub-evidence-v2");
-    let output = Command::new(binary).output().expect("run v2 binary");
+fn hub_evidence_v3_binary_rejects_missing_inputs() {
+    let binary = env!("CARGO_BIN_EXE_scicapsule-hub-evidence-v3");
+    let output = Command::new(binary).output().expect("run v3 binary");
     assert!(!output.status.success());
     let stderr = String::from_utf8(output.stderr).expect("stderr utf8");
     assert!(stderr.contains("--capsule is required"));
 }
 
 #[test]
-fn hub_evidence_v2_binary_rejects_relative_runtime_path_before_execution() {
+fn hub_evidence_v3_binary_rejects_relative_runtime_path_before_execution() {
     let temp = tempfile::tempdir().expect("tempdir");
     let capsule = temp.path().join("capsule.scicap");
     let policy = temp.path().join("policy.json");
@@ -30,7 +30,7 @@ fn hub_evidence_v2_binary_rejects_relative_runtime_path_before_execution() {
     )
     .expect("request fixture");
 
-    let binary = env!("CARGO_BIN_EXE_scicapsule-hub-evidence-v2");
+    let binary = env!("CARGO_BIN_EXE_scicapsule-hub-evidence-v3");
     let output = Command::new(binary)
         .args([
             "--capsule",
@@ -45,7 +45,7 @@ fn hub_evidence_v2_binary_rejects_relative_runtime_path_before_execution() {
             "relative-scicapsule",
         ])
         .output()
-        .expect("run v2 binary");
+        .expect("run v3 binary");
 
     assert!(!output.status.success());
     let stderr = String::from_utf8(output.stderr).expect("stderr utf8");
