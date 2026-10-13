@@ -1,9 +1,6 @@
 name: CI (pull requests)
 
 on:
-  # pull_request is retained only to validate this bootstrap PR. A follow-up
-  # installation probe removes it after pull_request_target is live on main.
-  pull_request:
   pull_request_target:
     types: [opened, synchronize, reopened, ready_for_review]
 
