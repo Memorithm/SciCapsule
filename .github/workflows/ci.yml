@@ -24,6 +24,9 @@ jobs:
           repository: ${{ github.event.pull_request.head.repo.full_name }}
           ref: ${{ github.event.pull_request.head.sha }}
           persist-credentials: false
+      - name: Validate proposed workflow YAML
+        run: |
+          ruby -e 'require "yaml"; Dir[".github/workflows/*.{yml,yaml}"].sort.each { |path| YAML.safe_load(File.read(path), aliases: true); puts "validated #{path}" }'
       - name: Prepare writable toolchain and temporary directories
         run: mkdir -p "$CARGO_HOME" "$TMPDIR" "$RUSTUP_HOME"
       - uses: dtolnay/rust-toolchain@fa04a1451ff1842e2626ccb99004d0195b455a88
