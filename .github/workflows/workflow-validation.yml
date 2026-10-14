@@ -30,12 +30,38 @@ jobs:
           set -euo pipefail
           ruby <<'RUBY'
           require 'yaml'
+          def workflow_document(bytes)
+            stream = YAML.parse_stream(bytes)
+            raise 'workflow must contain exactly one YAML document' unless stream.children.length == 1
+            document = YAML.safe_load(bytes, aliases: true)
+            raise 'workflow must be a mapping' unless document.is_a?(Hash)
+            document
+          end
+          # Exercise the same parser on finite positive/negative inputs. A
+          # valid first document cannot conceal an invalid/extra second one.
+          raise 'positive parser control failed' unless workflow_document("name: positive\njobs: {}\n").is_a?(Hash)
+          negatives = [
+            '',
+            "name: first\n---\nname: second\n",
+            "name: first\n---\nmalformed: [\n",
+            "[one, two]\n",
+            "name: [\n"
+          ]
+          negatives.each_with_index do |bytes, index|
+            refused = false
+            begin
+              workflow_document(bytes)
+            rescue Psych::Exception, RuntimeError
+              refused = true
+            end
+            raise "negative parser control #{index} was accepted" unless refused
+          end
+          puts 'WORKFLOW_YAML_FULL_STREAM_POSITIVE_AND_5_NEGATIVES_OK'
           paths = Dir['.github/workflows/*.{yml,yaml}'].sort
           abort 'invalid workflow inventory' if paths.empty? || paths.length > 64
           paths.each do |path|
             abort "workflow too large: #{path}" if File.size(path) > 1024 * 1024
-            document = YAML.safe_load(File.read(path), aliases: true)
-            abort "workflow must be a mapping: #{path}" unless document.is_a?(Hash)
+            workflow_document(File.read(path))
             puts "validated #{path}"
           end
           RUBY
