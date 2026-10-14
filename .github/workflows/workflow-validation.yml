@@ -65,3 +65,19 @@ jobs:
             puts "validated #{path}"
           end
           RUBY
+      - name: Exercise proposed base-controlled parser on hosted candidate
+        # pull_request_target runs the old base until merge. Execute the new
+        # parser definition here as candidate code on this disposable VM.
+        shell: bash
+        run: |
+          set -euo pipefail
+          ruby <<'RUBY'
+          require 'yaml'
+          document = YAML.safe_load(File.read('.github/workflows/ci.yml'), aliases: true)
+          steps = document.fetch('jobs').fetch('quality-and-msrv').fetch('steps')
+          selected = steps.select { |step| step['name'] == 'Validate proposed workflow YAML' }
+          abort 'expected exactly one proposed base parser' unless selected.length == 1
+          script = selected[0].fetch('run')
+          abort 'proposed base parser too large' unless script.is_a?(String) && script.bytesize <= 65536
+          exec('bash', '-euo', 'pipefail', '-c', script)
+          RUBY
