@@ -26,7 +26,38 @@ jobs:
           persist-credentials: false
       - name: Validate proposed workflow YAML
         run: |
-          ruby -e 'require "yaml"; Dir[".github/workflows/*.{yml,yaml}"].sort.each { |path| YAML.safe_load(File.read(path), aliases: true); puts "validated #{path}" }'
+          set -euo pipefail
+          # This parser is in the base-controlled pull_request_target workflow;
+          # candidate edits cannot replace its checks on subsequent PRs.
+          ruby <<'RUBY'
+          require 'yaml'
+          def workflow_document(bytes)
+            stream = YAML.parse_stream(bytes)
+            raise 'workflow must contain exactly one YAML document' unless stream.children.length == 1
+            document = YAML.safe_load(bytes, aliases: true)
+            raise 'workflow must be a mapping' unless document.is_a?(Hash)
+            document
+          end
+          raise 'positive parser control failed' unless workflow_document("name: positive\njobs: {}\n").is_a?(Hash)
+          negatives = ['', "name: first\n---\nname: second\n", "name: first\n---\nmalformed: [\n", "[one, two]\n", "name: [\n"]
+          negatives.each_with_index do |bytes, index|
+            refused = false
+            begin
+              workflow_document(bytes)
+            rescue Psych::Exception, RuntimeError
+              refused = true
+            end
+            raise "negative parser control #{index} was accepted" unless refused
+          end
+          puts 'BASE_WORKFLOW_YAML_FULL_STREAM_POSITIVE_AND_5_NEGATIVES_OK'
+          paths = Dir['.github/workflows/*.{yml,yaml}'].sort
+          abort 'invalid workflow inventory' if paths.empty? || paths.length > 64
+          paths.each do |path|
+            abort "workflow too large: #{path}" if File.size(path) > 1024 * 1024
+            workflow_document(File.read(path))
+            puts "validated #{path}"
+          end
+          RUBY
       - name: Prepare writable toolchain and temporary directories
         run: mkdir -p "$CARGO_HOME" "$TMPDIR" "$RUSTUP_HOME"
       - uses: dtolnay/rust-toolchain@fa04a1451ff1842e2626ccb99004d0195b455a88
