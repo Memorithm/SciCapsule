@@ -1,0 +1,41 @@
+name: Proposed workflow validation
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/**
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/**
+
+permissions:
+  contents: read
+
+jobs:
+  proposed-workflow-yaml:
+    # Candidate YAML must be exercised as candidate code on a disposable host,
+    # independently of pull_request_target's default-branch workflow definition.
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 3
+    steps:
+      - name: Checkout exact candidate without persistent credentials
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Parse exact proposed workflow bytes
+        shell: bash
+        run: |
+          set -euo pipefail
+          ruby <<'RUBY'
+          require 'yaml'
+          paths = Dir['.github/workflows/*.{yml,yaml}'].sort
+          abort 'invalid workflow inventory' if paths.empty? || paths.length > 64
+          paths.each do |path|
+            abort "workflow too large: #{path}" if File.size(path) > 1024 * 1024
+            document = YAML.safe_load(File.read(path), aliases: true)
+            abort "workflow must be a mapping: #{path}" unless document.is_a?(Hash)
+            puts "validated #{path}"
+          end
+          RUBY
